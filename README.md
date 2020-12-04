@@ -2,7 +2,7 @@
 
 ## Alphafold2 - Pytorch (wip)
 
-To eventually become a working Pytorch implementation of Alphafold2. Will be gradually implemented as more details of the architecture is released.
+To eventually become an unofficial working Pytorch implementation of Alphafold2. Will be gradually implemented as more details of the architecture is released.
 
 <img src="./science.png"></img>
 
