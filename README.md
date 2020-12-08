@@ -4,6 +4,8 @@
 
 To eventually become an unofficial working Pytorch implementation of Alphafold2. Will be gradually implemented as more details of the architecture is released.
 
+https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-ones-child-has-left-home/
+
 <img src="./science.png"></img>
 
 <img src="./reddit.png"></img>
