@@ -12,6 +12,10 @@ https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-on
 
 <img src="./reddit.png"></img>
 
+Developments from competing labs
+
+https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
+
 ## Citations
 
 ```bibtex
