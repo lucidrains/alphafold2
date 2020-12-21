@@ -21,5 +21,33 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
 ## Citations
 
 ```bibtex
-casp14
+@misc{unpublished2021alphafold2,
+    title={Alphafold2},
+    author={John Jumper},
+    year={2020},
+    archivePrefix={arXiv},
+    primaryClass={q-bio.BM}
+}
+```
+
+```bibtex
+@misc{king2020sidechainnet,
+    title={SidechainNet: An All-Atom Protein Structure Dataset for Machine Learning}, 
+    author={Jonathan E. King and David Ryan Koes},
+    year={2020},
+    eprint={2010.08162},
+    archivePrefix={arXiv},
+    primaryClass={q-bio.BM}
+}
+```
+
+```bibtex
+@misc{alquraishi2019proteinnet,
+    title={ProteinNet: a standardized data set for machine learning of protein structure}, 
+    author={Mohammed AlQuraishi},
+    year={2019},
+    eprint={1902.00249},
+    archivePrefix={arXiv},
+    primaryClass={q-bio.BM}
+}
 ```
