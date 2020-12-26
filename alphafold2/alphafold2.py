@@ -69,7 +69,7 @@ class Attention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None):
+    def forward(self, x, context = None, mask = None, context_mask = None):
         h = self.heads
 
         qkv = self.to_qkv(x)
@@ -97,7 +97,7 @@ class AxialAttention(nn.Module):
         self.attn_width = Attention(**kwargs)
         self.attn_height = Attention(**kwargs)
 
-    def forward(self, x, mask = None):
+    def forward(self, x, context = None, mask = None, context_mask = None):
         b, h, w, d = x.shape
 
         w_x = rearrange(x, 'b h w d -> (b w) h d')
@@ -135,6 +135,7 @@ class Alphafold2(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -142,6 +143,7 @@ class Alphafold2(nn.Module):
         self.msa_layers = nn.ModuleList([])
         for _ in range(depth):
             self.msa_layers.append(nn.ModuleList([
+                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout))
             ]))
@@ -153,11 +155,13 @@ class Alphafold2(nn.Module):
         device, msa_shape = seq.device, msa.shape
 
         # embed main sequence
+
         x = self.token_emb(seq)
         x += self.pos_emb(torch.arange(seq.shape[1], device = device))[None, ...]
         x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
 
         # embed multiple sequence alignment
+
         m = self.token_emb(msa)
         m += self.pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
         m = rearrange(m, 'b m n d -> b (m n) d')
@@ -166,7 +170,8 @@ class Alphafold2(nn.Module):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
 
         # trunk
-        for ((attn, ff), (msa_attn, msa_ff)) in zip(self.layers, self.msa_layers):
+
+        for ((attn, cross_attn, ff), (msa_attn, msa_cross_attn, msa_ff)) in zip(self.layers, self.msa_layers):
             x = attn(x, mask = mask) + x
             m = msa_attn(m, mask = msa_mask) + m
 
