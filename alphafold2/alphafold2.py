@@ -116,6 +116,7 @@ class Alphafold2(nn.Module):
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
+        self.norm = nn.LayerNorm(dim)
         self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
 
     def forward(self, seq, mask = None):
@@ -128,5 +129,6 @@ class Alphafold2(nn.Module):
             x = attn(x, mask = mask) + x
             x = ff(x) + x
 
+        x = self.norm(x)
         x = x[:, :, None, :] + x[:, None, :, :] # symmetrize
         return self.to_distogram_logits(x)
