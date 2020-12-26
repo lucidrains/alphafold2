@@ -21,10 +21,14 @@ from alphafold2 import Alphafold2
 model = Alphafold2(
     dim = 256,
     depth = 2,
+    heads = 8,
+    dim_head = 64
 ).cuda()
 
-x = torch.randint(0, 21, (1, 128)).cuda()
-distogram = model(x) # (1, 128, 128, 37)
+seq = torch.randint(0, 21, (1, 128)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+
+distogram = model(x, mask = mask) # (1, 128, 128, 37)
 ```
 
 ## Speculation
