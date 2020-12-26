@@ -138,21 +138,40 @@ class Alphafold2(nn.Module):
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
+
+        self.msa_layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.msa_layers.append(nn.ModuleList([
+                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(FeedForward(dim = dim, dropout = ff_dropout))
+            ]))
+
         self.norm = nn.LayerNorm(dim)
         self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
 
-    def forward(self, seq, mask = None):
-        n, device = seq.shape[1], seq.device
+    def forward(self, seq, msa, mask = None, msa_mask = None):
+        device, msa_shape = seq.device, msa.shape
 
+        # embed main sequence
         x = self.token_emb(seq)
-        x += self.pos_emb(torch.arange(n, device = device))
+        x += self.pos_emb(torch.arange(seq.shape[1], device = device))[None, ...]
+        x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
 
-        # create pairwise token embed
-        x = x[:, :, None, :] + x[:, None, :, :]
+        # embed multiple sequence alignment
+        m = self.token_emb(msa)
+        m += self.pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
+        m = rearrange(m, 'b m n d -> b (m n) d')
 
-        for (attn, ff) in self.layers:
+        if exists(msa_mask):
+            msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
+
+        # trunk
+        for ((attn, ff), (msa_attn, msa_ff)) in zip(self.layers, self.msa_layers):
             x = attn(x, mask = mask) + x
+            m = msa_attn(m, mask = msa_mask) + m
+
             x = ff(x) + x
+            m = ff(m) + m
 
         x = self.norm(x)
         return self.to_distogram_logits(x)
