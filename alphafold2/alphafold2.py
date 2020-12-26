@@ -88,6 +88,28 @@ class Attention(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
+class AxialAttention(nn.Module):
+    def __init__(
+        self,
+        **kwargs
+    ):
+        super().__init__()
+        self.attn_width = Attention(**kwargs)
+        self.attn_height = Attention(**kwargs)
+
+    def forward(self, x, mask = None):
+        b, h, w, d = x.shape
+
+        w_x = rearrange(x, 'b h w d -> (b w) h d')
+        w_out = self.attn_width(w_x, mask = mask)
+        w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
+
+        h_x = rearrange(x, 'b h w d -> (b h) w d')
+        h_out = self.attn_height(h_x, mask = mask)
+        h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
+
+        return w_out + h_out
+
 # main class
 
 class Alphafold2(nn.Module):
@@ -112,7 +134,7 @@ class Alphafold2(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -125,10 +147,12 @@ class Alphafold2(nn.Module):
         x = self.token_emb(seq)
         x += self.pos_emb(torch.arange(n, device = device))
 
+        # create pairwise token embed
+        x = x[:, :, None, :] + x[:, None, :, :]
+
         for (attn, ff) in self.layers:
             x = attn(x, mask = mask) + x
             x = ff(x) + x
 
         x = self.norm(x)
-        x = x[:, :, None, :] + x[:, None, :, :] # symmetrize
         return self.to_distogram_logits(x)

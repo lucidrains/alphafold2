@@ -6,6 +6,29 @@
 
 To eventually become an unofficial working Pytorch implementation of Alphafold2. Will be gradually implemented as more details of the architecture is released.
 
+## Install
+
+```bash
+$ pip install alphafold2-pytorch
+```
+
+## Usage
+
+```python
+import torch
+from alphafold2 import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+).cuda()
+
+x = torch.randint(0, 21, (1, 128)).cuda()
+distogram = model(x) # (1, 128, 128, 37)
+```
+
+## Speculation
+
 https://fabianfuchsml.github.io/alphafold2/
 
 https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-ones-child-has-left-home/
