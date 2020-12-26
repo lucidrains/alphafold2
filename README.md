@@ -26,9 +26,16 @@ model = Alphafold2(
 ).cuda()
 
 seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 64)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
 
-distogram = model(x, mask = mask) # (1, 128, 128, 37)
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
 ```
 
 ## Speculation
