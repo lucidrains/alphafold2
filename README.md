@@ -18,6 +18,8 @@ Developments from competing labs
 
 https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
 
+Final step - <a href="https://graylab.jhu.edu/PyRosetta.documentation/pyrosetta.rosetta.protocols.relax.html#pyrosetta.rosetta.protocols.relax.FastRelax">Fast Relax</a>
+
 ## Citations
 
 ```bibtex
