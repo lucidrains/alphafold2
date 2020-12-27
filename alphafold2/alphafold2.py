@@ -216,4 +216,6 @@ class Alphafold2(nn.Module):
             m = ff(m) + m
 
         x = self.norm(x)
+
+        x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
         return self.to_distogram_logits(x)
