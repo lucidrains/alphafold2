@@ -1,5 +1,6 @@
 import torch
 from torch import nn, einsum
+from inspect import isfunction
 from functools import partial
 import torch.nn.functional as F
 
@@ -14,6 +15,11 @@ DISTOGRAM_BUCKETS = 37
 
 def exists(val):
     return val is not None
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
 
 # helper classes
 
@@ -64,21 +70,27 @@ class Attention(nn.Module):
         inner_dim = dim_head * heads
         self.heads= heads
         self.scale = dim_head ** -0.5
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias = False)
+        self.to_q = nn.Linear(dim, inner_dim, bias = False)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim)
 
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, context = None, mask = None, context_mask = None):
-        h = self.heads
+        device, h, has_context = x.device, self.heads, exists(context)
+        context = default(context, x)
 
-        qkv = self.to_qkv(x)
-        q, k, v = rearrange(qkv, 'b n (h qkv d) -> b h n qkv d', h = h, qkv = 3).unbind(dim = -2)
+        q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
         dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
-        if exists(mask):
+        if exists(mask) or exists(context_mask):
+            mask = default(mask, lambda: torch.ones(*x.shape[:2], device = device))
+            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(*context.shape[:2], device = device))
+
             mask_value = -torch.finfo(dots.dtype).max
-            mask = mask[:, None, :, None] * mask[:, None, None, :]
+            mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots.masked_fill_(~mask, mask_value)
 
         attn = dots.softmax(dim = -1)
@@ -135,7 +147,7 @@ class Alphafold2(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -152,13 +164,14 @@ class Alphafold2(nn.Module):
         self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
 
     def forward(self, seq, msa, mask = None, msa_mask = None):
-        device, msa_shape = seq.device, msa.shape
+        n, device, msa_shape = seq.shape[1], seq.device, msa.shape
 
         # embed main sequence
 
         x = self.token_emb(seq)
-        x += self.pos_emb(torch.arange(seq.shape[1], device = device))[None, ...]
+        x += self.pos_emb(torch.arange(n, device = device))[None, ...]
         x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
+        x_cross_attn_mask = rearrange(mask[:, :, None] * mask[:, None, :], 'b i j -> b (i j)')
 
         # embed multiple sequence alignment
 
@@ -172,8 +185,32 @@ class Alphafold2(nn.Module):
         # trunk
 
         for ((attn, cross_attn, ff), (msa_attn, msa_cross_attn, msa_ff)) in zip(self.layers, self.msa_layers):
+            # self attention
+
             x = attn(x, mask = mask) + x
             m = msa_attn(m, mask = msa_mask) + m
+
+            # cross attention
+
+            x = rearrange(x, 'b i j d -> b (i j) d')
+
+            m = msa_cross_attn(
+                m,
+                mask = msa_mask,
+                context = x,
+                context_mask = x_cross_attn_mask
+            ) + m
+
+            x = cross_attn(
+                x,
+                mask = x_cross_attn_mask,
+                context = m,
+                context_mask = msa_mask
+            ) + x
+
+            x = rearrange(x, 'b (i j) d -> b i j d', i = n)
+
+            # feedforwards
 
             x = ff(x) + x
             m = ff(m) + m
