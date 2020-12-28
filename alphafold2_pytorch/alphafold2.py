@@ -111,13 +111,12 @@ class AxialAttention(nn.Module):
 
     def forward(self, x, context = None, mask = None, context_mask = None):
         b, h, w, d = x.shape
+        w_mask = h_mask = w_context = h_context = w_context_mask = h_context_mask = None
 
-        w_mask = h_mask = None
         if exists(mask):
             w_mask = rearrange(mask, 'b h w -> (b w) h', w = w)
             h_mask = rearrange(mask, 'b h w -> (b h) w', h = h)
 
-        w_context = h_context = w_context_mask = h_context_mask = None
         if exists(context):
             w_context = repeat(context, 'b n d -> (b w) n d', w = w)
             h_context = repeat(context, 'b n d -> (b h) n d', h = h)
@@ -155,6 +154,7 @@ class Alphafold2(nn.Module):
         self.pos_emb = nn.Embedding(max_seq_len, dim)
 
         # multiple sequence alignment position embedding
+
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
         self.msa_num_pos_emb = nn.Embedding(MAX_NUM_MSA, dim)
 
@@ -164,7 +164,7 @@ class Alphafold2(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -212,19 +212,24 @@ class Alphafold2(nn.Module):
 
             # cross attention
 
+            x = rearrange(x, 'b i j d -> b (i j) d')
+            x_mask_flat = rearrange(x_mask, 'b i j -> b (i j)')
+
             m = msa_cross_attn(
                 m,
                 mask = msa_mask,
-                context = rearrange(x, 'b i j d -> b (i j) d'),
-                context_mask = x_mask.flatten(1)
+                context = x,
+                context_mask = x_mask_flat
             ) + m
 
             x = cross_attn(
                 x,
-                mask = x_mask,
+                mask = x_mask_flat,
                 context = m,
                 context_mask = msa_mask
             ) + x
+
+            x = rearrange(x, 'b (i j) d -> b i j d', i = n)
 
             # feedforwards
 
