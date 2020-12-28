@@ -4,12 +4,13 @@ from inspect import isfunction
 from functools import partial
 import torch.nn.functional as F
 
-from einops import rearrange
+from einops import rearrange, repeat
 
 # constants
 
 NUM_AMINO_ACIDS = 21
 DISTOGRAM_BUCKETS = 37
+MAX_NUM_MSA = 20
 
 # helpers
 
@@ -88,7 +89,6 @@ class Attention(nn.Module):
         if exists(mask) or exists(context_mask):
             mask = default(mask, lambda: torch.ones(*x.shape[:2], device = device))
             context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(*context.shape[:2], device = device))
-
             mask_value = -torch.finfo(dots.dtype).max
             mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots.masked_fill_(~mask, mask_value)
@@ -112,12 +112,24 @@ class AxialAttention(nn.Module):
     def forward(self, x, context = None, mask = None, context_mask = None):
         b, h, w, d = x.shape
 
+        w_mask = h_mask = None
+        if exists(mask):
+            w_mask = rearrange(mask, 'b h w -> (b w) h', w = w)
+            h_mask = rearrange(mask, 'b h w -> (b h) w', h = h)
+
+        w_context = h_context = w_context_mask = h_context_mask = None
+        if exists(context):
+            w_context = repeat(context, 'b n d -> (b w) n d', w = w)
+            h_context = repeat(context, 'b n d -> (b h) n d', h = h)
+            w_context_mask = repeat(context_mask, 'b n -> (b w) n', w = w)
+            h_context_mask = repeat(context_mask, 'b n -> (b h) n', h = h)
+
         w_x = rearrange(x, 'b h w d -> (b w) h d')
-        w_out = self.attn_width(w_x, mask = mask, context = context, context_mask = context_mask)
+        w_out = self.attn_width(w_x, mask = w_mask, context = w_context, context_mask = w_context_mask)
         w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
         h_x = rearrange(x, 'b h w d -> (b h) w d')
-        h_out = self.attn_height(h_x, mask = mask, context = context, context_mask = context_mask)
+        h_out = self.attn_height(h_x, mask = h_mask, context = h_context, context_mask = h_context_mask)
         h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
         return w_out + h_out
@@ -139,7 +151,12 @@ class Alphafold2(nn.Module):
     ):
         super().__init__()
         self.token_emb = nn.Embedding(NUM_AMINO_ACIDS, dim)
+
         self.pos_emb = nn.Embedding(max_seq_len, dim)
+
+        # multiple sequence alignment position embedding
+        self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
+        self.msa_num_pos_emb = nn.Embedding(MAX_NUM_MSA, dim)
 
         wrapper = partial(PreNorm, dim)
 
@@ -147,7 +164,7 @@ class Alphafold2(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -171,12 +188,14 @@ class Alphafold2(nn.Module):
         x = self.token_emb(seq)
         x += self.pos_emb(torch.arange(n, device = device))[None, ...]
         x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
-        x_cross_attn_mask = rearrange(mask[:, :, None] * mask[:, None, :], 'b i j -> b (i j)')
+        x_mask = mask[:, :, None] * mask[:, None, :]
 
         # embed multiple sequence alignment
 
         m = self.token_emb(msa)
-        m += self.pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
+        m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
+        m += self.msa_num_pos_emb(torch.arange(msa.shape[1], device = device))[None, :, None, :]
+
         m = rearrange(m, 'b m n d -> b (m n) d')
 
         if exists(msa_mask):
@@ -185,30 +204,27 @@ class Alphafold2(nn.Module):
         # trunk
 
         for ((attn, cross_attn, ff), (msa_attn, msa_cross_attn, msa_ff)) in zip(self.layers, self.msa_layers):
+
             # self attention
 
-            x = attn(x, mask = mask) + x
+            x = attn(x, mask = x_mask) + x
             m = msa_attn(m, mask = msa_mask) + m
 
             # cross attention
 
-            x = rearrange(x, 'b i j d -> b (i j) d')
-
             m = msa_cross_attn(
                 m,
                 mask = msa_mask,
-                context = x,
-                context_mask = x_cross_attn_mask
+                context = rearrange(x, 'b i j d -> b (i j) d'),
+                context_mask = x_mask.flatten(1)
             ) + m
 
             x = cross_attn(
                 x,
-                mask = x_cross_attn_mask,
+                mask = x_mask,
                 context = m,
                 context_mask = msa_mask
             ) + x
-
-            x = rearrange(x, 'b (i j) d -> b i j d', i = n)
 
             # feedforwards
 
