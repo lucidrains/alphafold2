@@ -234,7 +234,7 @@ class Alphafold2(nn.Module):
             # feedforwards
 
             x = ff(x) + x
-            m = ff(m) + m
+            m = msa_ff(m) + m
 
         x = self.norm(x)
 
