@@ -9,7 +9,7 @@ from einops import rearrange, repeat
 # constants
 
 NUM_AMINO_ACIDS = 21
-DISTOGRAM_BUCKETS = 37
+DISTOGRAM_BUCKETS = 37 + 1
 MAX_NUM_MSA = 20
 
 # helpers
@@ -180,8 +180,8 @@ class Alphafold2(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
 
-    def forward(self, seq, msa, mask = None, msa_mask = None):
-        n, device, msa_shape = seq.shape[1], seq.device, msa.shape
+    def forward(self, seq, msa = None, mask = None, msa_mask = None):
+        n, device = seq.shape[1], seq.device
 
         # embed main sequence
 
@@ -192,11 +192,14 @@ class Alphafold2(nn.Module):
 
         # embed multiple sequence alignment
 
-        m = self.token_emb(msa)
-        m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
-        m += self.msa_num_pos_emb(torch.arange(msa.shape[1], device = device))[None, :, None, :]
+        if exists(msa):
+            msa_shape = msa.shape
 
-        m = rearrange(m, 'b m n d -> b (m n) d')
+            m = self.token_emb(msa)
+            m += self.msa_pos_emb(torch.arange(msa_shape[-1], device = device))[None, None, ...]
+            m += self.msa_num_pos_emb(torch.arange(msa._shape[1], device = device))[None, :, None, :]
+
+            m = rearrange(m, 'b m n d -> b (m n) d')
 
         if exists(msa_mask):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
@@ -208,33 +211,37 @@ class Alphafold2(nn.Module):
             # self attention
 
             x = attn(x, mask = x_mask) + x
-            m = msa_attn(m, mask = msa_mask) + m
 
-            # cross attention
+            if exists(msa):
+                m = msa_attn(m, mask = msa_mask) + m
 
-            x = rearrange(x, 'b i j d -> b (i j) d')
-            x_mask_flat = rearrange(x_mask, 'b i j -> b (i j)')
+                # cross attention
 
-            m = msa_cross_attn(
-                m,
-                mask = msa_mask,
-                context = x,
-                context_mask = x_mask_flat
-            ) + m
+                x = rearrange(x, 'b i j d -> b (i j) d')
+                x_mask_flat = rearrange(x_mask, 'b i j -> b (i j)')
 
-            x = cross_attn(
-                x,
-                mask = x_mask_flat,
-                context = m,
-                context_mask = msa_mask
-            ) + x
+                m = msa_cross_attn(
+                    m,
+                    mask = msa_mask,
+                    context = x,
+                    context_mask = x_mask_flat
+                ) + m
 
-            x = rearrange(x, 'b (i j) d -> b i j d', i = n)
+                x = cross_attn(
+                    x,
+                    mask = x_mask_flat,
+                    context = m,
+                    context_mask = msa_mask
+                ) + x
+
+                x = rearrange(x, 'b (i j) d -> b i j d', i = n)
 
             # feedforwards
 
             x = ff(x) + x
-            m = msa_ff(m) + m
+
+            if exists(msa):
+                m = msa_ff(m) + m
 
         x = self.norm(x)
 

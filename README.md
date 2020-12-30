@@ -36,6 +36,17 @@ distogram = model(
 ) # (1, 128, 128, 37)
 ```
 
+## Data
+
+This library will use the awesome work by Jonathan King at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>.
+
+To install
+
+```bash
+$ git clone https://github.com/jonathanking/sidechainnet.git
+$ cd sidechainnet && pip install -e .
+```
+
 ## Speculation
 
 https://fabianfuchsml.github.io/alphafold2/
