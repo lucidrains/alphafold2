@@ -38,7 +38,7 @@ distogram = model(
 
 ## Data
 
-This library will use the awesome work by Jonathan King at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>.
+This library will use the awesome work by <a href="http://github.com/jonathanking">Jonathan King</a> at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>.
 
 To install
 
