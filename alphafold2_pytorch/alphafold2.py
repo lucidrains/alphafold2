@@ -9,7 +9,7 @@ from einops import rearrange, repeat
 # constants
 
 NUM_AMINO_ACIDS = 21
-DISTOGRAM_BUCKETS = 37 + 1
+DISTOGRAM_BUCKETS = 37
 MAX_NUM_MSA = 20
 
 # helpers
