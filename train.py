@@ -34,8 +34,7 @@ def get_bucketed_distance_matrix(coords, mask):
     coords_center = coords[:, :, :2].mean(dim = 2) # mean of coordinates of N, Cα, C
     distances = ((coords_center[:, :, None, :] - coords_center[:, None, :, :]) ** 2).sum(dim = -1).sqrt()
     boundaries = torch.linspace(2, 20, steps = DISTANCE_BINS, device = coords.device)
-    discretized_distances = torch.bucketize(distances, boundaries)
-    discretized_distances.masked_fill_(discretized_distances == DISTANCE_BINS, (DISTANCE_BINS - 1))
+    discretized_distances = torch.bucketize(distances, boundaries[:-1])
     discretized_distances.masked_fill_(mask[:, :, None] | mask[:, None, :], IGNORE_INDEX)
     return discretized_distances
 
