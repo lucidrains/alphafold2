@@ -26,16 +26,12 @@ def cycle(loader, cond = lambda x: True):
                 continue
             yield data
 
-def derive_mask(coords):
-    coords_center = coords[:, :, :2].mean(dim = 2) # mean of coordinates of N, Cα, C
-    return coords_center.sum(dim = -1) == 0
-
 def get_bucketed_distance_matrix(coords, mask):
     coords_center = coords[:, :, :2].mean(dim = 2) # mean of coordinates of N, Cα, C
     distances = ((coords_center[:, :, None, :] - coords_center[:, None, :, :]) ** 2).sum(dim = -1).sqrt()
     boundaries = torch.linspace(2, 20, steps = DISTANCE_BINS, device = coords.device)
     discretized_distances = torch.bucketize(distances, boundaries[:-1])
-    discretized_distances.masked_fill_(mask[:, :, None] | mask[:, None, :], IGNORE_INDEX)
+    discretized_distances.masked_fill_(~(mask[:, :, None] & mask[:, None, :]), IGNORE_INDEX)
     return discretized_distances
 
 # get data
@@ -45,7 +41,8 @@ data = scn.load(
     thinning = 30,
     with_pytorch = 'dataloaders',
     batch_size = 1,
-    dynamic_batching = False
+    dynamic_batching = False,
+    return_masks = True
 )
 
 data = iter(data['train'])
@@ -69,24 +66,19 @@ optim = Adam(model.parameters(), lr = LEARNING_RATE)
 
 for _ in range(NUM_BATCHES):
     for _ in range(GRADIENT_ACCUMULATE_EVERY):
-        _, seq, *_, coords = next(dl)
+        _, seq, _, mask, *_, coords = next(dl)
         b, l = seq.shape
 
         # prepare mask, labels
 
-        seq, coords = seq.cuda(), coords.cuda()
+        seq, coords, mask = seq.cuda(), coords.cuda(), mask.cuda().bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
-        mask = derive_mask(coords)
 
         discretized_distances = get_bucketed_distance_matrix(coords, mask)
 
         # predict
 
-        distogram = model(
-            seq,
-            mask = ~mask
-        )
-
+        distogram = model(seq, mask = mask)
         distogram = rearrange(distogram, 'b i j c -> b c i j')
 
         # loss
