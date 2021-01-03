@@ -25,20 +25,53 @@ def shape_and_backend(x,y,backend):
     return x,y,backend
 
 
-# alignment
+# alignment by centering + rotation to compute optimal RMSD
+# adapted from : https://github.com/charnley/rmsd/
 
 def kabsch_torch(X, Y):
-    """ Kabsch alignment of X with Y as reference. 
-        Assumes x,y are both (B x D x N). See below for wrapper.
+    """ Kabsch alignment of X into Y. 
+        Assumes X,Y are both (Dims x N_points). See below for wrapper.
     """
-    raise NotImplementedError("Torch backend not yet implemented")
+    #  center X and Y to the origin
+    X_ = X - X.mean(dim=-1, keepdim=True)
+    Y_ = Y - Y.mean(dim=-1, keepdim=True)
+    # calculate convariance matrix (for each prot in the batch)
+    C = torch.dot(X_, Y_.t())
+    # Optimal rotation matrix via SVD
+    V, S, W = torch.svd(C)
+    # determinant sign for direction correction
+    d = (torch.det(V) * torch.det(W)) < 0.0
+    if d:
+        S[-1]    = S[-1] * (-1)
+        V[:, -1] = V[:, -1] * (-1)
+    # Create Rotation matrix U
+    U = torch.dot(V, W)
+    # calculate rotations
+    X_ = torch.dot(X_.t(), U).t()
+    # return centered and aligned
     return X_, Y_
 
 def kabsch_numpy(X, Y):
-    """ Kabsch alignment of X with Y as reference. 
-        Assumes x,y are both (B x D x N). See below for wrapper.
+    """ Kabsch alignment of X into Y. 
+        Assumes X,Y are both (Dims x N_points). See below for wrapper.
     """
-
+    # center X and Y to the origin
+    X_ = X - X.mean(axis=-1, keepdims=True)
+    Y_ = Y - Y.mean(axis=-1, keepdims=True)
+    # calculate convariance matrix (for each prot in the batch)
+    C = np.dot(X_, Y_.transpose())
+    # Optimal rotation matrix via SVD
+    V, S, W = np.linalg.svd(C)
+    # determinant sign for direction correction
+    d = (np.linalg.det(V) * np.linalg.det(W)) < 0.0
+    if d:
+        S[-1]    = S[-1] * (-1)
+        V[:, -1] = V[:, -1] * (-1)
+    # Create Rotation matrix U
+    U = np.dot(V, W)
+    # calculate rotations
+    X_ = np.dot(X_.transpose(), U).transpose()
+    # return centered and aligned
     return X_, Y_
 
 
@@ -109,6 +142,23 @@ def tmscore_numpy(X, Y):
 ################
 ### WRAPPERS ###
 ################
+
+def Kabsch(A, B, backend="auto"):
+    """ Returns Kabsch-rotated matrices resulting
+        from aligning A into B.
+        Adapted from: https://github.com/charnley/rmsd/
+        * Inputs: 
+            * A,B are (3 x N)
+            * backend: one of ["numpy", "torch", "auto"] for backend choice
+        * Outputs: tensor/array of shape (3 x N)
+    """
+    A, B, backend = shape_and_backend(A, B, backend)
+    # run calcs - pick the 0th bc an additional dim was created
+    if backend == "torch":
+        return kabsch_torch(A[0], B[0])
+    else:
+        return kabsch_numpy(A[0], B[0])
+
 
 def RMSD(A, B, backend="auto"):
     """ Returns RMSD score as defined here (lower is better):
