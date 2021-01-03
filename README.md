@@ -4,6 +4,8 @@
 
 To eventually become an unofficial working Pytorch implementation of Alphafold2. Will be gradually implemented as more details of the architecture is released.
 
+If you are interested in replication efforts, please drop by #alphafold at this <a href="https://discord.com/invite/vtRgjbM">Discord channel</a>
+
 ## Install
 
 ```bash
