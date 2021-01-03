@@ -1,6 +1,10 @@
 # Training Data
 sidechainnet_data/
 
+# random stuff like notes
+notes.md
+*.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
