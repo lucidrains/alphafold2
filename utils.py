@@ -2,6 +2,11 @@
 import numpy as np 
 import torch
 
+# common utils
+
+def custom2pdb(coords, atom_names, aa_belongs):
+    """ Takes a custom representation and turns into a .pdb file. """
+    raise NotImplementedError("Not implemented yet. Yet to see what's our output format.")
 
 def shape_and_backend(x,y,backend):
     """ pack here for reuse. 
@@ -23,6 +28,79 @@ def shape_and_backend(x,y,backend):
         raise ValueError("Shapes of A and B must match.")
 
     return x,y,backend
+
+
+# distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
+
+def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
+        """ Gets distance matrix. Outputs 3d. See below for wrapper. 
+        Assumes (for now) distrogram is (N x N) and symmetric
+    """
+    N = distogram.shape[-1]
+    # init random coords
+    best_stress = torch.inf 
+    best_3d_coords = torch.rand(3, N)
+    # iterative updates:
+    for i in range(iters):
+        # compute distance matrix of coords and stress
+        dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=1)
+        stress   = ((dist_mat - distogram)**2).sum() / 2
+        # perturb - update X using the Guttman transform - sklearn-like
+        dist_mat[dist_mat == 0] = 1e-5
+        ratio = distogram / dist_mat
+        B = ratio * (-1)
+        B[np.arange(N), np.arange(N)] += ratio.sum(dim=1)
+        # update - double transpose. TODO: consider fix
+        coords = (1. / N * torch.dot(B, X.t())).t()
+        dis = torch.sqrt((coords ** 2).sum(axis=1)).sum()
+        if verbose >= 2:
+            print('it: %d, stress %s' % (it, stress))
+        # update metrics if relative improvement above tolerance
+        if(best_stress - stress / dis) > eps:
+            best_3d_coords = coords
+            best_stress = (stress / dis).item()
+        else:
+            if verbose:
+                print('breaking at iteration %d with stress %s' % (it,
+                                                                   stress))
+            break
+
+    return best_3d_coords, best_stress
+
+def mds_numpy(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
+    """ Gets distance matrix. Outputs 3d. See below for wrapper. 
+        Assumes (for now) distrogram is (N x N) and symmetric
+    """
+    N = distogram.shape[-1]
+    # init random coords
+    best_stress = np.inf 
+    best_3d_coords = np.random.rand(3, N)
+    # iterative updates:
+    for i in range(iters):
+        # compute distance matrix of coords and stress
+        dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=-1)
+        stress   = ((dist_mat - distogram)**2).sum() / 2
+        # perturb - update X using the Guttman transform - sklearn-like
+        dist_mat[dist_mat == 0] = 1e-5
+        ratio = distogram / dist_mat
+        B = ratio * (-1)
+        B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
+        # update - double transpose. TODO: consider fix
+        coords = (1. / N * np.dot(B, X.transpose())).transpose()
+        dis = np.sqrt((coords ** 2).sum(axis=1)).sum()
+        if verbose >= 2:
+            print('it: %d, stress %s' % (it, stress))
+        # update metrics if relative improvement above tolerance
+        if(best_stress - stress / dis) > eps:
+            best_3d_coords = coords
+            best_stress = stress / dis
+        else:
+            if verbose:
+                print('breaking at iteration %d with stress %s' % (it,
+                                                                   stress))
+            break
+
+    return best_3d_coords, best_stress
 
 
 # alignment by centering + rotation to compute optimal RMSD
@@ -138,6 +216,7 @@ def tmscore_numpy(X, Y):
     dist = np.sqrt( ((X - Y)**2).sum(axis=1) )
     # formula (see wrapper for source): 
     return (1 / (1 + (dist/d0)**2)).mean(axis=-1)
+
 
 ################
 ### WRAPPERS ###
