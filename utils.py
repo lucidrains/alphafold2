@@ -229,21 +229,21 @@ def tmscore_numpy(X, Y):
 ### WRAPPERS ###
 ################
 
-def MDScaling(distogram, iters=10, tol=1e-5, verbose=2):
+def MDScaling(distogram, iters=10, tol=1e-5, backend="auto", verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
         Inputs:
         * distogram: (N x N) distance matrix. TODO: support probabilities
-
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
                improvement is achieved
+        * backend: one of ["numpy", "torch", "auto"] for backend choice
         * verbose: whether to print logs
         Outputs:
         * best_3d_coords: (3 x N)
         * historic_stress: list
     """
-     if backend == "auto":
+    if backend == "auto":
         if isinstance(distogram, torch.Tensor):
             backend = "torch"
         else:
