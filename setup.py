@@ -15,8 +15,9 @@ setup(
     'protein folding'
   ],
   install_requires=[
-    'torch>=1.6',
-    'einops>=0.3'
+    'einops>=0.3',
+    'numpy',
+    'torch>=1.6'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',
