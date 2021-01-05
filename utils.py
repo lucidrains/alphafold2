@@ -44,7 +44,7 @@ def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
-        dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=1)
+        dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=2)
         stress   = ((dist_mat - distogram)**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
@@ -67,7 +67,7 @@ def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
                                                                    stress))
             break
 
-    return best_3d_coords, his
+    return best_3d_coords, torch.tensor(his)
 
 def mds_numpy(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
