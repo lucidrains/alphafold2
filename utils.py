@@ -149,9 +149,10 @@ def fix_mirrors_torch(preds, N_mask, CA_mask, verbose=0):
     # compute phis and count lower than 0s
     phis_count = []
     for i in range(cs.shape[0]):
-        phis = []
-        for j in range(1, cs.shape[1]-1):
-            phis.append( get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) )
+        # calculate phi angles
+        phis = [ get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
+                 for j in range(1, cs.shape[1]-1) ]
+
         phis_count.append( (torch.tensor(phis)<0).float().sum() )
     # debugging/testing if arg passed
     if verbose:
@@ -169,9 +170,10 @@ def fix_mirrors_numpy(preds, N_mask, CA_mask, verbose=0):
     # compute phis and count lower than 0s
     phis_count = []
     for i in range(cs.shape[0]):
-        phis = []
-        for j in range(1, cs.shape[1]-1):
-            phis.append( get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) )
+        # calculate phi angles
+        phis = [ get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
+                 for j in range(1, cs.shape[1]-1) ]
+
         phis_count.append( (np.array(phis)<0).sum() )
     # debugging/testing if arg passed
     if verbose:
