@@ -2,14 +2,17 @@
 import os
 import json
 import mdtraj
+import numpy as np
 # installation instructs in readme
 # TODO: relocate this to readme: http://www.pyrosetta.org/dow
 import pyrosetta
 
+# parsing to pdb for easier visualization
+
 def downloadPDB(name, route):
     """ Downloads a PDB entry from the RCSB PDB. 
         Inputs:
-        * name: str. the PDB entry id. 4 characters
+        * name: str. the PDB entry id. 4 characters, capitalized.
         * route: str. route of the destin file. usually ".pdb" extension
         Output: route of destin file
     """
