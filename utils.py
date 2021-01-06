@@ -338,7 +338,7 @@ def MDScaling(distogram, iters=10, tol=1e-5, backend="auto",
         preds = [mds_numpy(distogram, iters=iters, tol=tol, verbose=verbose) \
                  for i in range(max(1,fix_mirror))]
         if not fix_mirror:
-            return pred[0]
+            return preds[0]
         else:
             return fix_mirrors_numpy(preds, N_mask, CA_mask)
 
