@@ -4,10 +4,6 @@ import torch
 
 # common utils
 
-def custom2pdb(coords, atom_names, aa_belongs):
-    """ Takes a custom representation and turns into a .pdb file. """
-    raise NotImplementedError("Not implemented yet. Yet to see what's our output format.")
-
 def shape_and_backend(x,y,backend):
     """ pack here for reuse. 
         turns input into (B x D x N) and chooses backend
@@ -108,6 +104,77 @@ def mds_numpy(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
             break
 
     return best_3d_coords, np.array(his)
+
+# TODO: test
+def get_dihedral_torch(c1, c2, c3, c4, c5):
+    """ Returns the dihedral angle in radians.
+        Will use atan2 formula from: 
+        https://en.wikipedia.org/wiki/Dihedral_angle#In_polymer_physics
+    """
+
+    u1 = c2 - c1
+    u2 = c3 - c2
+    u3 = c4 - c3
+    u4 = c5 - c4
+
+    return torch.atan2( torch.dot( torch.norm(u2) * u1, torch.cross(u3,u4) ),  
+                        torch.dot( torch.cross(u1,u2), torch.cross(u3, u4) ) ) 
+
+def get_dihedral_numpy(c1, c2, c3, c4, c5):
+    """ Returns the dihedral angle in radians.
+        Will use atan2 formula from: 
+        https://en.wikipedia.org/wiki/Dihedral_angle#In_polymer_physics
+    """
+
+    u1 = c2 - c1
+    u2 = c3 - c2
+    u3 = c4 - c3
+    u4 = c5 - c4
+
+    return np.arctan2( np.dot( np.linalg.norm(u2) * u1, np.cross(u3,u4) ),  
+                       np.dot( np.cross(u1,u2), np.cross(u3, u4) ) ) 
+
+def fix_mirrors_torch(preds, N_mask, CA_mask, verbose=0):
+    """ Filters mirrors selecting the 1 with most N of negative phis.
+        Used as part of the MDScaling wrapper if arg is passed. See below.
+        Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
+    """ 
+    preds_ = torch.cat([x[0].detach().unsqueeze(0) for x in preds], dim=0)
+    ns = torch.transpose(preds_, -1, -2)[:, N_mask][:, 1:]
+    cs = torch.transpose(preds_, -1, -2)[:, CA_mask]
+    # compute phis and count lower than 0s
+    phis_count = []
+    for i in range(cs.shape[0]):
+        # calculate phi angles
+        phis = [ get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
+                 for j in range(1, cs.shape[1]-1) ]
+
+        phis_count.append( (torch.tensor(phis)<0).float().sum() )
+    # debugging/testing if arg passed
+    if verbose:
+        print("Negative phis:", phis_count)
+    return preds[torch.argmax(torch.tensor(phis_count))]
+
+def fix_mirrors_numpy(preds, N_mask, CA_mask, verbose=0):
+    """ Filters mirrors selecting the 1 with most N of negative phis.
+        Used as part of the MDScaling wrapper if arg is passed. See below.
+        Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
+    """ 
+    preds_ = np.array([x[0] for x in preds])
+    ns = np.transpose(preds_, (0, 2, 1))[N_mask][1:]
+    cs =  np.transpose(preds_, (0, 2, 1))[CA_mask]
+    # compute phis and count lower than 0s
+    phis_count = []
+    for i in range(cs.shape[0]):
+        # calculate phi angles
+        phis = [ get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
+                 for j in range(1, cs.shape[1]-1) ]
+
+        phis_count.append( (np.array(phis)<0).sum() )
+    # debugging/testing if arg passed
+    if verbose:
+        print("Negative phis:", phis_count)
+    return preds[np.argmax(np.array(phis_count))]
 
 
 # alignment by centering + rotation to compute optimal RMSD
@@ -229,7 +296,8 @@ def tmscore_numpy(X, Y):
 ### WRAPPERS ###
 ################
 
-def MDScaling(distogram, iters=10, tol=1e-5, backend="auto", verbose=2):
+def MDScaling(distogram, iters=10, tol=1e-5, backend="auto",
+              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
         Inputs:
@@ -238,6 +306,12 @@ def MDScaling(distogram, iters=10, tol=1e-5, backend="auto", verbose=2):
         * tol: relative tolerance at which to stop the algorithm if no better
                improvement is achieved
         * backend: one of ["numpy", "torch", "auto"] for backend choice
+        * fix_mirror: int. number of iterations to run the 3d generation and
+                      pick the best mirror (highest number of negative phis)
+        * N_mask: indexing array/tensor for indices of backbone N.
+                  Only used if fix_mirror > 0.
+        * CA_mask: indexing array/tensor for indices of backbone C_alpha.
+                   Only used if fix_mirror > 0.
         * verbose: whether to print logs
         Outputs:
         * best_3d_coords: (3 x N)
@@ -250,9 +324,19 @@ def MDScaling(distogram, iters=10, tol=1e-5, backend="auto", verbose=2):
             backend = "numpy"
     # run calcs     
     if backend == "torch":
-        return mds_torch(distogram, iters=iters, tol=tol, verbose=verbose)
+        preds = [mds_torch(distogram, iters=iters, tol=tol, verbose=verbose) \
+                 for i in range( max(1,fix_mirror) )]
+        if not fix_mirror:
+            return preds[0]
+        else:
+            return fix_mirrors_torch(preds, N_mask, CA_mask)
     else:
-        return mds_numpy(distogram, iters=iters, tol=tol, verbose=verbose)
+        preds = [mds_numpy(distogram, iters=iters, tol=tol, verbose=verbose) \
+                 for i in range(max(1,fix_mirror))]
+        if not fix_mirror:
+            return preds[0]
+        else:
+            return fix_mirrors_numpy(preds, N_mask, CA_mask)
 
 
 def Kabsch(A, B, backend="auto"):
