@@ -4,10 +4,6 @@ import torch
 
 # common utils
 
-def custom2pdb(coords, atom_names, aa_belongs):
-    """ Takes a custom representation and turns into a .pdb file. """
-    raise NotImplementedError("Not implemented yet. Yet to see what's our output format.")
-
 def shape_and_backend(x,y,backend):
     """ pack here for reuse. 
         turns input into (B x D x N) and chooses backend
