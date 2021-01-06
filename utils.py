@@ -122,7 +122,7 @@ def get_dihedral_torch(c1, c2, c3, c4, c5):
     u4 = c5 - c4
 
     return torch.atan2( torch.dot( torch.norm(u2) * u1, torch.cross(u3,u4) ),  
-                        torch.dot( torch.cross(u1,u2), torch.cros(u3, u4) ) ) 
+                        torch.dot( torch.cross(u1,u2), torch.cross(u3, u4) ) ) 
 
 def get_dihedral_numpy(c1, c2, c3, c4, c5):
     """ Returns the dihedral angle in radians.
@@ -136,41 +136,46 @@ def get_dihedral_numpy(c1, c2, c3, c4, c5):
     u4 = c5 - c4
 
     return np.arctan2( np.dot( np.linalg.norm(u2) * u1, np.cross(u3,u4) ),  
-                       np.dot( np.cross(u1,u2), np.cros(u3, u4) ) ) 
+                       np.dot( np.cross(u1,u2), np.cross(u3, u4) ) ) 
 
-# TODO: select direction and pipe to phi calc
-def fix_mirrors_torch(preds, N_mask, CA_mask):
+def fix_mirrors_torch(preds, N_mask, CA_mask, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
     """ 
-    ns = preds.t(-1, -2)[N_mask][1:].detach()
-    cs = preds.t(-1, -2)[CA_mask].detach()
+    preds_ = torch.cat([x[0].detach().unsqueeze(0) for x in preds], dim=0)
+    ns = torch.transpose(preds_, -1, -2)[:, N_mask][:, 1:]
+    cs = torch.transpose(preds_, -1, -2)[:, CA_mask]
     # compute phis and count lower than 0s
     phis_count = []
     for i in range(cs.shape[0]):
         phis = []
         for j in range(1, cs.shape[1]-1):
-            phis.append( get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], n[i,j+1], cs[i,j+1]) )
+            phis.append( get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) )
         phis_count.append( (torch.tensor(phis)<0).float().sum() )
-
+    # debugging/testing if arg passed
+    if verbose:
+        print("Negative phis:", phis_count)
     return preds[torch.argmax(torch.tensor(phis_count))]
 
-def fix_mirrors_numpy(preds, N_mask, CA_mask):
+def fix_mirrors_numpy(preds, N_mask, CA_mask, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
     """ 
-    ns = np.transpose(preds, (0, 2, 1))[N_mask][1:]
-    cs =  np.transpose(preds, (0, 2, 1))[CA_mask]
+    preds_ = np.array([x[0] for x in preds])
+    ns = np.transpose(preds_, (0, 2, 1))[N_mask][1:]
+    cs =  np.transpose(preds_, (0, 2, 1))[CA_mask]
     # compute phis and count lower than 0s
     phis_count = []
     for i in range(cs.shape[0]):
         phis = []
         for j in range(1, cs.shape[1]-1):
-            phis.append( get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], n[i,j+1], cs[i,j+1]) )
+            phis.append( get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) )
         phis_count.append( (np.array(phis)<0).sum() )
-
+    # debugging/testing if arg passed
+    if verbose:
+        print("Negative phis:", phis_count)
     return preds[np.argmax(np.array(phis_count))]
 
 
@@ -322,14 +327,14 @@ def MDScaling(distogram, iters=10, tol=1e-5, backend="auto",
     # run calcs     
     if backend == "torch":
         preds = [mds_torch(distogram, iters=iters, tol=tol, verbose=verbose) \
-                 for i in range(fix_mirror+1)]
+                 for i in range( max(1,fix_mirror) )]
         if not fix_mirror:
             return preds[0]
         else:
             return fix_mirrors_torch(preds, N_mask, CA_mask)
     else:
         preds = [mds_numpy(distogram, iters=iters, tol=tol, verbose=verbose) \
-                 for i in range(fix_mirror+1)]
+                 for i in range(max(1,fix_mirror))]
         if not fix_mirror:
             return pred[0]
         else:
