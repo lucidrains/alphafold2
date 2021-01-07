@@ -1,11 +1,19 @@
 # will use FastRelax routine to refine structure
 import os
 import json
+import warnings
+# science
 import mdtraj
 import numpy as np
-# installation instructs in readme
+# pyrosetta installation instructs in readme
 # TODO: relocate this to readme: http://www.pyrosetta.org/dow
-import pyrosetta
+try: 
+    import pyrosetta
+except ModuleNotFoundError:
+    msg = "Unable to find an existing installation of the PyRosetta module. " +\
+          "Functions involving this module such as the FastRelax pipeline " +\
+          "will not work."
+    warnings.warn(msg) # no pyRosetta was found
 
 # parsing to pdb for easier visualization
 
@@ -89,7 +97,7 @@ def pdb2rosetta(route):
         * route: list or string.
         Output: list of 1 or many according to input
        """
-       if isinstance(route, str):
+    if isinstance(route, str):
         return [pyrosetta.io.pose_from_pdb(route)]
     else:
         return list(pyrosetta.io.poses_from_files(route))
