@@ -6,7 +6,6 @@ import warnings
 import mdtraj
 import numpy as np
 # pyrosetta installation instructs in readme
-# TODO: relocate this to readme: http://www.pyrosetta.org/dow
 try: 
     import pyrosetta
 except ModuleNotFoundError:
@@ -15,7 +14,8 @@ except ModuleNotFoundError:
           "will not work."
     warnings.warn(msg) # no pyRosetta was found
 
-# parsing to pdb for easier visualization
+# parsing to pdb for easier visualization - other example from sidechainnet is:
+# https://github.com/jonathanking/sidechainnet/tree/master/sidechainnet/structure
 
 def downloadPDB(name, route):
     """ Downloads a PDB entry from the RCSB PDB. 
