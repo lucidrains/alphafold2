@@ -125,12 +125,23 @@ def rosetta2pdb(pose, route, verbose=True):
             print("Saved structure @ "+route)
     return
 
-def run_fast_relax(config_route, pose):
+def run_fast_relax(config_route, pdb_route=None, pose=None):
     """ Runs the Fast-Relax pipeline.
         * config_route: route to json file with config
         * pose: rosetta pose to run the pipeline on
         Output: rosetta pose
     """
+    # load rosetta pose - if string or list is passed, convert to pose + recall
+    if isinstance(pdb_route, str):
+        pose = pdb2rosetta(pdb_route)
+        return run_fast_relax(config, pose=pose)
+    elif isinstance(pdb_route, list):
+        return [run_fast_relax(config, pdb_route=pdb) for pdb in pdb_route]
+    # load config:
     config = json.load(config_route)
+    # run fast relax pipeline - examples:
+    # https://colab.research.google.com/github/RosettaCommons/PyRosetta.notebooks/blob/master/notebooks/06.02-Packing-design-and-regional-relax.ipynb#scrollTo=PYr025Rn1Q8i
+    # https://nbviewer.jupyter.org/github/RosettaCommons/PyRosetta.notebooks/blob/master/notebooks/06.03-Design-with-a-resfile-and-relax.ipynb
+    # https://faculty.washington.edu/dimaio/files/demo2.py
     raise NotImplementedError("Last step. Not implemented yet.")
 
