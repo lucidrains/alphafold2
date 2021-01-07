@@ -4,6 +4,7 @@ sidechainnet_data/
 # random stuff like notes
 notes.md
 *.DS_Store
+*.config
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

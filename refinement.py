@@ -1,15 +1,26 @@
 # will use FastRelax routine to refine structure
 import os
 import json
+import warnings
+# science
 import mdtraj
-# installation instructs in readme
-# TODO: relocate this to readme: http://www.pyrosetta.org/dow
-import pyrosetta
+import numpy as np
+# pyrosetta installation instructs in readme
+try: 
+    import pyrosetta
+except ModuleNotFoundError:
+    msg = "Unable to find an existing installation of the PyRosetta module. " +\
+          "Functions involving this module such as the FastRelax pipeline " +\
+          "will not work."
+    warnings.warn(msg) # no pyRosetta was found
+
+# parsing to pdb for easier visualization - other example from sidechainnet is:
+# https://github.com/jonathanking/sidechainnet/tree/master/sidechainnet/structure
 
 def downloadPDB(name, route):
     """ Downloads a PDB entry from the RCSB PDB. 
         Inputs:
-        * name: str. the PDB entry id. 4 characters
+        * name: str. the PDB entry id. 4 characters, capitalized.
         * route: str. route of the destin file. usually ".pdb" extension
         Output: route of destin file
     """
@@ -86,7 +97,7 @@ def pdb2rosetta(route):
         * route: list or string.
         Output: list of 1 or many according to input
        """
-       if isinstance(route, str):
+    if isinstance(route, str):
         return [pyrosetta.io.pose_from_pdb(route)]
     else:
         return list(pyrosetta.io.poses_from_files(route))
@@ -114,12 +125,23 @@ def rosetta2pdb(pose, route, verbose=True):
             print("Saved structure @ "+route)
     return
 
-def run_fast_relax(config_route, pose):
+def run_fast_relax(config_route, pdb_route=None, pose=None):
     """ Runs the Fast-Relax pipeline.
         * config_route: route to json file with config
         * pose: rosetta pose to run the pipeline on
         Output: rosetta pose
     """
+    # load rosetta pose - if string or list is passed, convert to pose + recall
+    if isinstance(pdb_route, str):
+        pose = pdb2rosetta(pdb_route)
+        return run_fast_relax(config, pose=pose)
+    elif isinstance(pdb_route, list):
+        return [run_fast_relax(config, pdb_route=pdb) for pdb in pdb_route]
+    # load config:
     config = json.load(config_route)
+    # run fast relax pipeline - examples:
+    # https://colab.research.google.com/github/RosettaCommons/PyRosetta.notebooks/blob/master/notebooks/06.02-Packing-design-and-regional-relax.ipynb#scrollTo=PYr025Rn1Q8i
+    # https://nbviewer.jupyter.org/github/RosettaCommons/PyRosetta.notebooks/blob/master/notebooks/06.03-Design-with-a-resfile-and-relax.ipynb
+    # https://faculty.washington.edu/dimaio/files/demo2.py
     raise NotImplementedError("Last step. Not implemented yet.")
 

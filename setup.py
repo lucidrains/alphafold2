@@ -17,7 +17,8 @@ setup(
   install_requires=[
     'einops>=0.3',
     'numpy',
-    'torch>=1.6'
+    'torch>=1.6',
+    'mdtraj>=1.8'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',

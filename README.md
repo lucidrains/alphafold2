@@ -63,7 +63,10 @@ Developments from competing labs
 
 https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
 
-Final step - <a href="https://graylab.jhu.edu/PyRosetta.documentation/pyrosetta.rosetta.protocols.relax.html#pyrosetta.rosetta.protocols.relax.FastRelax">Fast Relax</a>
+* **Final step** - <a href="https://graylab.jhu.edu/PyRosetta.documentation/pyrosetta.rosetta.protocols.relax.html#pyrosetta.rosetta.protocols.relax.FastRelax">Fast Relax</a> - **Installation Instructions**:
+    * Download the pyrosetta wheel from: http://www.pyrosetta.org/dow (select appropiate version) - beware the file is heavy (approx 1.2 Gb)
+        * Ask for username and password to `@hypnopump` in the Discord
+    * Bash > `cd downloads_folder` > `pip install pyrosetta_wheel_filename.whl`
 
 ## Citations
 
