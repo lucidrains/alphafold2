@@ -3,7 +3,6 @@ import os
 import json
 import warnings
 # science
-import mdtraj
 import numpy as np
 # pyrosetta installation instructs in readme
 try: 
@@ -13,77 +12,6 @@ except ModuleNotFoundError:
           "Functions involving this module such as the FastRelax pipeline " +\
           "will not work."
     warnings.warn(msg) # no pyRosetta was found
-
-# parsing to pdb for easier visualization - other example from sidechainnet is:
-# https://github.com/jonathanking/sidechainnet/tree/master/sidechainnet/structure
-
-def downloadPDB(name, route):
-    """ Downloads a PDB entry from the RCSB PDB. 
-        Inputs:
-        * name: str. the PDB entry id. 4 characters, capitalized.
-        * route: str. route of the destin file. usually ".pdb" extension
-        Output: route of destin file
-    """
-    os.system("curl https://files.rcsb.org/download/{0}.pdb > {1}".format(name, route))
-    return route
-
-def clean_pdb(name, route=None, chain_num=None):
-    """ Cleans the structure to only leave the important part.
-        Inputs: 
-        * name: str. route of the input .pdb file
-        * route: str. route of the output. will overwrite input if not provided
-        * chain_num: int. index of chain to select (1-indexed as pdb files)
-        Output: route of destin file.
-    """
-    destin = route if route is not None else name
-    # read input
-    raw_prot = mdtraj.load_pdb(name)
-    # iterate over prot and select the specified chains
-    idxs = []
-    for chain in raw_prot.topology.chains:
-        # if arg passed, only select that chain
-        if chain_num is not None:
-            if chain_num != chain.index:
-                continue
-        # select indexes of chain
-        chain_idxs = raw_prot.topology.select("chainid == {0}".format(chain.index))
-        idxs.extend( chain_idxs.tolist() )
-    # sort: topology and xyz selection are ordered
-    idxs = sorted(idxs)
-    # get new trajectory from the sleected subset of indexes and save
-    prot = mdtraj.Trajectory(xyz=raw_prot.xyz[:, idxs], 
-                             topology=raw_prot.topology.subset(idxs))
-    prot.save(destin)
-    return destin
-
-def custom2pdb(coords, proteinnet_id, route):
-    """ Takes a custom representation and turns into a .pdb file. 
-        Inputs:
-        * coords: array/tensor of shape (3 x N) or (N x 3). in Angstroms.
-                  same order as in the proteinnnet is assumed (same as raw pdb file)
-        * proteinnet_id: str. proteinnet id format (<class>#<pdb_id>_<chain_number>_<chain_id>)
-                         see: https://github.com/aqlaboratory/proteinnet/
-        * route: str. destin route.
-        Output: tuple of routes: (original, generated) for the structures. 
-    """
-    # convert to numpy
-    if isinstance(coords, torch.Tensor):
-    	coords = coords.detach().cpu().numpy()
-    # ensure (1, N, 3)
-    if coords.shape[1] == 3:
-    	coords = coords.T
-    coords = np.newaxis(coords, axis=0)
-    # get pdb id and chain num
-    pdb_name, china_num = proteinnet_id.split("#")[-1].split("_")[:-1]
-    pdb_destin = "/".join(route.split("/")[:-1])+"/"+pdb_name+".pdb"
-    # download pdb file and select appropiate 
-    downloadPDB(pdb_name, pdb_destin)
-    clean_pdb(pdb_destin, chain_num=chain_num)
-    # load trajectory scaffold and replace coordinates - assumes same order
-    scaffold = mdtraj.load_pdb(pdb_destin)
-    scaffold.xyz = coords
-    scaffold.save(route)
-    return pdb_destin, route
 
 
 #####################

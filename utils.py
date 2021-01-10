@@ -1,6 +1,9 @@
 # utils for working with 3d-protein structures
+import os
 import numpy as np 
 import torch
+# bio
+import mdtraj
 
 # common utils
 
@@ -25,13 +28,86 @@ def shape_and_backend(x,y,backend):
 
     return x,y,backend
 
+# parsing to pdb for easier visualization - other example from sidechainnet is:
+# https://github.com/jonathanking/sidechainnet/tree/master/sidechainnet/structure
+
+def downloadPDB(name, route):
+    """ Downloads a PDB entry from the RCSB PDB. 
+        Inputs:
+        * name: str. the PDB entry id. 4 characters, capitalized.
+        * route: str. route of the destin file. usually ".pdb" extension
+        Output: route of destin file
+    """
+    os.system("curl https://files.rcsb.org/download/{0}.pdb > {1}".format(name, route))
+    return route
+
+def clean_pdb(name, route=None, chain_num=None):
+    """ Cleans the structure to only leave the important part.
+        Inputs: 
+        * name: str. route of the input .pdb file
+        * route: str. route of the output. will overwrite input if not provided
+        * chain_num: int. index of chain to select (1-indexed as pdb files)
+        Output: route of destin file.
+    """
+    destin = route if route is not None else name
+    # read input
+    raw_prot = mdtraj.load_pdb(name)
+    # iterate over prot and select the specified chains
+    idxs = []
+    for chain in raw_prot.topology.chains:
+        # if arg passed, only select that chain
+        if chain_num is not None:
+            if chain_num != chain.index:
+                continue
+        # select indexes of chain
+        chain_idxs = raw_prot.topology.select("chainid == {0}".format(chain.index))
+        idxs.extend( chain_idxs.tolist() )
+    # sort: topology and xyz selection are ordered
+    idxs = sorted(idxs)
+    # get new trajectory from the sleected subset of indexes and save
+    prot = mdtraj.Trajectory(xyz=raw_prot.xyz[:, idxs], 
+                             topology=raw_prot.topology.subset(idxs))
+    prot.save(destin)
+    return destin
+
+def custom2pdb(coords, proteinnet_id, route):
+    """ Takes a custom representation and turns into a .pdb file. 
+        Inputs:
+        * coords: array/tensor of shape (3 x N) or (N x 3). in Angstroms.
+                  same order as in the proteinnnet is assumed (same as raw pdb file)
+        * proteinnet_id: str. proteinnet id format (<class>#<pdb_id>_<chain_number>_<chain_id>)
+                         see: https://github.com/aqlaboratory/proteinnet/
+        * route: str. destin route.
+        Output: tuple of routes: (original, generated) for the structures. 
+    """
+    # convert to numpy
+    if isinstance(coords, torch.Tensor):
+        coords = coords.detach().cpu().numpy()
+    # ensure (1, N, 3)
+    if coords.shape[1] == 3:
+        coords = coords.T
+    coords = np.newaxis(coords, axis=0)
+    # get pdb id and chain num
+    pdb_name, china_num = proteinnet_id.split("#")[-1].split("_")[:-1]
+    pdb_destin = "/".join(route.split("/")[:-1])+"/"+pdb_name+".pdb"
+    # download pdb file and select appropiate 
+    downloadPDB(pdb_name, pdb_destin)
+    clean_pdb(pdb_destin, chain_num=chain_num)
+    # load trajectory scaffold and replace coordinates - assumes same order
+    scaffold = mdtraj.load_pdb(pdb_destin)
+    scaffold.xyz = coords
+    scaffold.save(route)
+    return pdb_destin, route
+
 
 # distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
-def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
+def mds_torch(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
     """
+    if weights is None:
+        weights = torch.ones_like(distogram)
     N = distogram.shape[-1]
     his = []
     # init random coords
@@ -41,7 +117,7 @@ def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=2)
-        stress   = ((dist_mat - distogram)**2).sum() / 2
+        stress   = (( weights * (dist_mat - distogram) )**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
         ratio = distogram / dist_mat
@@ -65,13 +141,15 @@ def mds_torch(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
 
     return best_3d_coords, torch.tensor(his)
 
-def mds_numpy(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
+def mds_numpy(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
         Out:
         * best_3d_coords: (3 x N)
         * historic_stress 
     """
+    if weights is None:
+        weights = np.ones_like(distogram)
     N = distogram.shape[-1]
     his = []
     # init random coords
@@ -81,7 +159,7 @@ def mds_numpy(distogram, probs=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=0)
-        stress   = ((dist_mat - distogram)**2).sum() / 2
+        stress   = (( weights * (dist_mat - distogram) )**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
         ratio = distogram / dist_mat
@@ -296,12 +374,13 @@ def tmscore_numpy(X, Y):
 ### WRAPPERS ###
 ################
 
-def MDScaling(distogram, iters=10, tol=1e-5, backend="auto",
+def MDScaling(distogram, weights=None, iters=10, tol=1e-5, backend="auto",
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
         Inputs:
         * distogram: (N x N) distance matrix. TODO: support probabilities
+        * weights: optional. (N x N) pairwise relative weights .
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
                improvement is achieved
@@ -324,15 +403,17 @@ def MDScaling(distogram, iters=10, tol=1e-5, backend="auto",
             backend = "numpy"
     # run calcs     
     if backend == "torch":
-        preds = [mds_torch(distogram, iters=iters, tol=tol, verbose=verbose) \
+        preds = [mds_torch(distogram, weights=weights,iters=iters, 
+                                      tol=tol, verbose=verbose) \
                  for i in range( max(1,fix_mirror) )]
         if not fix_mirror:
             return preds[0]
         else:
             return fix_mirrors_torch(preds, N_mask, CA_mask)
     else:
-        preds = [mds_numpy(distogram, iters=iters, tol=tol, verbose=verbose) \
-                 for i in range(max(1,fix_mirror))]
+        preds = [mds_numpy(distogram, weights=weights,iters=iters, 
+                                      tol=tol, verbose=verbose) \
+                 for i in range( max(1,fix_mirror) )]
         if not fix_mirror:
             return preds[0]
         else:
