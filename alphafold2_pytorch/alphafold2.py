@@ -197,7 +197,7 @@ class Alphafold2(nn.Module):
 
             m = self.token_emb(msa)
             m += self.msa_pos_emb(torch.arange(msa_shape[-1], device = device))[None, None, ...]
-            m += self.msa_num_pos_emb(torch.arange(msa._shape[1], device = device))[None, :, None, :]
+            m += self.msa_num_pos_emb(torch.arange(msa_shape[1], device = device))[None, :, None, :]
 
             m = rearrange(m, 'b m n d -> b (m n) d')
 
