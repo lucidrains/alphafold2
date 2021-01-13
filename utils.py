@@ -5,6 +5,11 @@ import torch
 # bio
 import mdtraj
 
+# constants: same as in alphafold2.py
+
+DISTOGRAM_BUCKETS = 37
+DISTANCE_THRESHOLDS = [1.5 + 0.5*i for i in range(DISTOGRAM_BUCKETS)]
+
 # common utils
 
 def shape_and_backend(x,y,backend):
@@ -102,7 +107,7 @@ def custom2pdb(coords, proteinnet_id, route):
 
 # distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
-def center_distogram_torch(distogram, bins, min_t=1.):
+def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1.):
     """ Returns the central estimate of a distogram. Median for now.
         Inputs:
         * distogram: (N x N x B) where B is the number of buckets. 
