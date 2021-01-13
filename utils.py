@@ -102,7 +102,30 @@ def custom2pdb(coords, proteinnet_id, route):
 
 # distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
-def mds_torch(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
+def center_distogram_torch(distogram, bins, min_t=1.):
+    """ Returns the central estimate of a distogram. Median for now.
+        Inputs:
+        * distogram: (N x N x B) where B is the number of buckets. 
+                     Supports batched predictions (batch x N x N x B)
+        * bins: (B,) containing the cutoffs for the different buckets
+        * min_t: float. lower bound for distances.
+        TODO: return confidence/weights
+    """
+    shape = distogram.shape
+    n_bins = torch.ones(shape[-1] + 1) * min_t
+    n_bins[1:] = torch.tensor(bins)
+    # center - median
+    cum_dist = torch.cumsum(distogram, dim=-1)
+    central  = torch.searchsorted(cum_dist, 0.5)
+    for i in range(shape[-1]):
+        central[central==i] = (n_bins[i]+n_bins[i+1])/2
+    # mask diagonal to 0 dist
+    central[np.arange(shape[-2]), np.arange(shape[-3])] = 0.
+    # provide weights
+    weights = torch.ones_like(central)
+    return central, weights
+
+def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
     """
