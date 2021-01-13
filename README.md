@@ -40,7 +40,11 @@ distogram = model(
 
 distances, weights = center_distogram_torch(distogram)
 
-coords_3d = MDScaling(distances, weights, iters=200, fix_mirror=0) 
+coords_3d = MDScaling(distances, 
+    weights,
+    iters = 200, 
+    fix_mirror = 0
+) 
 ```
 
 ## Data
