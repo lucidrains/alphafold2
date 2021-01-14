@@ -7,8 +7,8 @@ import mdtraj
 
 # constants: same as in alphafold2.py
 
-DISTOGRAM_BUCKETS = 37
-DISTANCE_THRESHOLDS = [1.5 + 0.5*i for i in range(DISTOGRAM_BUCKETS)]
+DISTOGRAM_BUCKETS = 38
+DISTANCE_THRESHOLDS = torch.linspace(1.5, 20, steps = DISTOGRAM_BUCKETS)
 
 # common utils
 
@@ -107,7 +107,7 @@ def custom2pdb(coords, proteinnet_id, route):
 
 # distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
-def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1.):
+def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
         Inputs:
         * distogram: (N x N x B) where B is the number of buckets. 
@@ -117,17 +117,27 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1.):
         TODO: return confidence/weights
     """
     shape = distogram.shape
-    n_bins = torch.ones(shape[-1] + 1) * min_t
-    n_bins[1:] = torch.tensor(bins)
-    # center - median
-    cum_dist = torch.cumsum(distogram, dim=-1)
-    central  = torch.searchsorted(cum_dist, 0.5)
-    for i in range(shape[-1]):
-        central[central==i] = (n_bins[i]+n_bins[i+1])/2
+    bins  = bins.to(distogram.device) - (bins[1]-bins[2])/2
+    # calculate measures of centrality and dispersion
+    if center == "median":
+        cum_dist = torch.cumsum(distogram, dim=-1)
+        central  = torch.searchsorted(cum_dist, 0.5)
+        for i in range(shape[-1]):
+            central[central==i] = bins[i]
+    elif center == "mean":
+        central  = (distogram*bins).sum(dim=-1)
     # mask diagonal to 0 dist
     central[np.arange(shape[-2]), np.arange(shape[-3])] = 0.
     # provide weights
-    weights = torch.ones_like(central)
+    if wide == "var":
+        weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1)
+    elif wide == "sqrt":
+        weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
+    else:
+        weights = torch.zeros_like(central)
+    # rescale to 0-1. lower std / var  --> weight=1
+    weights = 1 / (1+weights)
+    # TODO: rescale to 0-1?
     return central, weights
 
 def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
