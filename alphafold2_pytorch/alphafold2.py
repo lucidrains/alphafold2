@@ -11,7 +11,6 @@ from einops import rearrange, repeat
 MAX_NUM_MSA = 20
 NUM_AMINO_ACIDS = 21
 DISTOGRAM_BUCKETS = 37
-DISTANCE_THRESHOLDS = [1.5 + 0.5*i for i in range(DISTOGRAM_BUCKETS)]
 
 # helpers
 
