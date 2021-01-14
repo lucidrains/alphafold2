@@ -131,13 +131,12 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # provide weights
     if wide == "var":
         weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1)
-    elif wide == "sqrt":
+    elif wide == "std":
         weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
         weights = torch.zeros_like(central)
     # rescale to 0-1. lower std / var  --> weight=1
     weights = 1 / (1+weights)
-    # TODO: rescale to 0-1?
     return central, weights
 
 def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
