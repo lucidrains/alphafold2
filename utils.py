@@ -7,8 +7,8 @@ import mdtraj
 
 # constants: same as in alphafold2.py
 
-DISTOGRAM_BUCKETS = 38
-DISTANCE_THRESHOLDS = torch.linspace(1.5, 20, steps = DISTOGRAM_BUCKETS)
+DISTOGRAM_BUCKETS = 37
+DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
 
 # common utils
 
