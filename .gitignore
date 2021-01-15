@@ -5,6 +5,7 @@ sidechainnet_data/
 notes.md
 *.DS_Store
 *.config
+end2end.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

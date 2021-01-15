@@ -4,6 +4,7 @@ import numpy as np
 import torch
 # bio
 import mdtraj
+from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 
 # constants: same as in alphafold2.py
 
@@ -105,7 +106,23 @@ def custom2pdb(coords, proteinnet_id, route):
     return pdb_destin, route
 
 
-# distogram to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
+# distance utils (distogram to dist mat + masking)
+
+def scn_seq_mask(scn_seq, bool=True):
+    """ Gets the boolean mask for N and CA positions. 
+        Inputs: 
+        * scn_seq: sequence as provided by Sidechainnet package
+        * bool: whether to return as array of idxs or boolean values
+        Outputs: (N_mask, CA_mask)
+    """
+    lengths = np.arange(len(scn_seq)*NUM_COORDS_PER_RES)
+    # N is the first atom in every AA. CA is the 2nd.
+    N_mask  = lengths%NUM_COORDS_PER_RES == 0
+    CA_mask = lengths%NUM_COORDS_PER_RES == 1
+    if boolean:
+        return N_mask, CA_mask
+    else:
+        return lengths[N_mask], lengths[CA_mask]
 
 def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
@@ -139,13 +156,15 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     weights = 1 / (1+weights)
     return central, weights
 
-def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
+# distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
+
+def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
     """
     if weights is None:
-        weights = torch.ones_like(distogram)
-    N = distogram.shape[-1]
+        weights = torch.ones_like(pre_dist_mat)
+    N = pre_dist_mat.shape[-1]
     his = []
     # init random coords
     best_stress = float("Inf") 
@@ -154,10 +173,10 @@ def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=2)
-        stress   = (( weights * (dist_mat - distogram) )**2).sum() / 2
+        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
-        ratio = distogram / dist_mat
+        ratio = pre_dist_mat / dist_mat
         B = ratio * (-1)
         B[np.arange(N), np.arange(N)] += ratio.sum(dim=1)
         # update - double transpose. TODO: consider fix
@@ -178,7 +197,7 @@ def mds_torch(dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
 
     return best_3d_coords, torch.tensor(his)
 
-def mds_numpy(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
+def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
         Out:
@@ -186,8 +205,8 @@ def mds_numpy(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
         * historic_stress 
     """
     if weights is None:
-        weights = np.ones_like(distogram)
-    N = distogram.shape[-1]
+        weights = np.ones_like(pre_dist_mat)
+    N = pre_dist_mat.shape[-1]
     his = []
     # init random coords
     best_stress = np.inf 
@@ -196,10 +215,10 @@ def mds_numpy(distogram, weights=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=0)
-        stress   = (( weights * (dist_mat - distogram) )**2).sum() / 2
+        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
-        ratio = distogram / dist_mat
+        ratio = pre_dist_mat / dist_mat
         B = ratio * (-1)
         B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
         # update - double transpose. TODO: consider fix
@@ -305,7 +324,7 @@ def kabsch_torch(X, Y):
     # calculate convariance matrix (for each prot in the batch)
     C = torch.matmul(X_, Y_.t())
     # Optimal rotation matrix via SVD - warning! W must be transposed
-    V, S, W = torch.svd(C)
+    V, S, W = torch.svd(C.detach())
     # determinant sign for direction correction
     d = (torch.det(V) * torch.det(W)) < 0.0
     if d:
@@ -411,7 +430,7 @@ def tmscore_numpy(X, Y):
 ### WRAPPERS ###
 ################
 
-def MDScaling(distogram, weights=None, iters=10, tol=1e-5, backend="auto",
+def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
@@ -434,13 +453,13 @@ def MDScaling(distogram, weights=None, iters=10, tol=1e-5, backend="auto",
         * historic_stress: list
     """
     if backend == "auto":
-        if isinstance(distogram, torch.Tensor):
+        if isinstance(pre_dist_mat, torch.Tensor):
             backend = "torch"
         else:
             backend = "numpy"
     # run calcs     
     if backend == "torch":
-        preds = [mds_torch(distogram, weights=weights,iters=iters, 
+        preds = [mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                       tol=tol, verbose=verbose) \
                  for i in range( max(1,fix_mirror) )]
         if not fix_mirror:
@@ -448,7 +467,7 @@ def MDScaling(distogram, weights=None, iters=10, tol=1e-5, backend="auto",
         else:
             return fix_mirrors_torch(preds, N_mask, CA_mask)
     else:
-        preds = [mds_numpy(distogram, weights=weights,iters=iters, 
+        preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
                                       tol=tol, verbose=verbose) \
                  for i in range( max(1,fix_mirror) )]
         if not fix_mirror:
