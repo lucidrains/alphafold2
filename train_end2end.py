@@ -6,6 +6,7 @@ from einops import rearrange
 
 import sidechainnet as scn
 from alphafold2_pytorch import Alphafold2
+from utils import *
 
 
 # constants
@@ -25,14 +26,6 @@ def cycle(loader, cond = lambda x: True):
             if not cond(data):
                 continue
             yield data
-
-def get_bucketed_distance_matrix(coords, mask):
-    coords_center = coords[:, :, :2].mean(dim = 2) # mean of coordinates of N, Cα, C
-    distances = ((coords_center[:, :, None, :] - coords_center[:, None, :, :]) ** 2).sum(dim = -1).sqrt()
-    boundaries = torch.linspace(2, 20, steps = DISTANCE_BINS, device = coords.device)
-    discretized_distances = torch.bucketize(distances, boundaries[:-1])
-    discretized_distances.masked_fill_(~(mask[:, :, None] & mask[:, None, :]), IGNORE_INDEX)
-    return discretized_distances
 
 # get data
 
@@ -58,8 +51,9 @@ model = Alphafold2(
     dim_head = 64
 ).cuda()
 
-# optimizer
-
+# optimizer 
+std_weight = 0.1
+criterion = nn.MSELoss()
 optim = Adam(model.parameters(), lr = LEARNING_RATE)
 
 # training loop
@@ -74,20 +68,33 @@ for _ in range(NUM_BATCHES):
         seq, coords, mask = seq.cuda(), coords.cuda(), mask.cuda().bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
-        discretized_distances = get_bucketed_distance_matrix(coords, mask)
-
         # predict
 
         distogram = model(seq, mask = mask)
-        distogram = rearrange(distogram, 'b i j c -> b c i j')
+
+        # convert to 3d
+        N_mask, CA_mask = scn_seq_mask(seq)
+        distances, weights = center_distogram_torch(distogram)
+
+        coords_3d = MDScaling(distances, 
+            weights,
+            iters = 200, 
+            fix_mirror = 5, 
+            N_mask = N_mask,
+            CA_mask = CA_mask
+        ) 
+
+        # refine
+
+        # TODO: coords_align = refiner(coords_align)
+
+        # rotate / align
+
+        coords_aligned = Kabsch(coords_3d, coords)
 
         # loss
-
-        loss = F.cross_entropy(
-            distogram,
-            discretized_distances,
-            ignore_index = IGNORE_INDEX
-        )
+        std  = 1-(1/weights)
+        loss = torch.sqrt(criterion(coords_aligned, coords)) + std_weight * torch.norm(std)
 
         loss.backward()
 
