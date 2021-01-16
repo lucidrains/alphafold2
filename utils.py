@@ -134,27 +134,34 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
         TODO: return confidence/weights
     """
     shape = distogram.shape
-    bins  = bins.to(distogram.device) - (bins[1]-bins[2])/2
-    # calculate measures of centrality and dispersion
+    # threshold to weights and find mean value of each bin
+    n_bins = bins - 0.5 * (bins[2] - bins[2])
+    n_bins[0]  = 1.5
+    # TODO: adapt so that mean option considers IGNORE_INDEX
+    n_bins[-1] = n_bins[-1]
+    n_bins = n_bins.to(distogram.device)
+    # calculate measures of centrality and dispersion - 
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
         central  = torch.searchsorted(cum_dist, 0.5)
-        for i in range(shape[-1]):
-            central[central==i] = bins[i]
+        central  = n_bins[central.long()]
     elif center == "mean":
-        central  = (distogram*bins).sum(dim=-1)
-    # mask diagonal to 0 dist
+        central  = (distogram * n_bins).sum(dim=-1)
+    # create mask for last class - (IGNORE_INDEX)   
+    mask = (central <= bins[-2].item()).float()
+    # mask diagonal to 0 dist 
     central[np.arange(shape[-2]), np.arange(shape[-3])] = 0.
     # provide weights
     if wide == "var":
-        weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1)
+        dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
     elif wide == "std":
-        weights = (distogram * (bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
+        dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
-        weights = torch.zeros_like(central)
+        dispersion = torch.zeros_like(central)
     # rescale to 0-1. lower std / var  --> weight=1
-    weights = 1 / (1+weights)
-    return central, weights
+    weights = mask / (1+dispersion)
+
+    return central, dispersion, weights
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
@@ -173,10 +180,10 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=2)
-        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() / 2
+        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
-        ratio = pre_dist_mat / dist_mat
+        ratio = weights * (pre_dist_mat / dist_mat)
         B = ratio * (-1)
         B[np.arange(N), np.arange(N)] += ratio.sum(dim=1)
         # update - double transpose. TODO: consider fix
