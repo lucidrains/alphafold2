@@ -135,7 +135,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     """
     shape = distogram.shape
     # threshold to weights and find mean value of each bin
-    n_bins = bins - 0.5 * (bins[1] + bins[2])
+    n_bins = bins - 0.5 * (bins[2] - bins[2])
     n_bins[0]  = 1.5
     # TODO: adapt so that mean option considers IGNORE_INDEX
     n_bins[-1] = n_bins[-1]
