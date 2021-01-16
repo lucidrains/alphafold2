@@ -38,7 +38,7 @@ distogram = model(
     msa_mask = msa_mask
 ) # (1, 128, 128, 37)
 
-distances, weights = center_distogram_torch(distogram)
+distances, _, weights = center_distogram_torch(distogram)
 
 coords_3d = MDScaling(distances, 
     weights,

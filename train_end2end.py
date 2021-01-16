@@ -52,7 +52,7 @@ model = Alphafold2(
 ).cuda()
 
 # optimizer 
-std_weight = 0.1
+dispersion_weight = 0.1
 criterion = nn.MSELoss()
 optim = Adam(model.parameters(), lr = LEARNING_RATE)
 
@@ -74,7 +74,7 @@ for _ in range(NUM_BATCHES):
 
         # convert to 3d
         N_mask, CA_mask = scn_seq_mask(seq)
-        distances, weights = center_distogram_torch(distogram)
+        distances, dispersion, weights = center_distogram_torch(distogram)
 
         coords_3d = MDScaling(distances, 
             weights,
@@ -93,8 +93,7 @@ for _ in range(NUM_BATCHES):
         coords_aligned = Kabsch(coords_3d, coords)
 
         # loss
-        std  = 1-(1/weights)
-        loss = torch.sqrt(criterion(coords_aligned, coords)) + std_weight * torch.norm(std)
+        loss = torch.sqrt(criterion(coords_aligned, coords)) + dispersion_weight * torch.norm(dispersion)
 
         loss.backward()
 
