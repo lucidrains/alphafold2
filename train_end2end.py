@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 import sidechainnet as scn
-from alphafold2_pytorch import Alphafold2
+from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 from utils import *
 
 
@@ -16,7 +16,6 @@ GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
-DISTANCE_BINS = 37
 
 # helpers
 

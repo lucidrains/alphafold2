@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 import sidechainnet as scn
-from alphafold2_pytorch import Alphafold2
+from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 
 
 # constants
@@ -15,7 +15,6 @@ GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
-DISTANCE_BINS = 37
 
 # helpers
 
@@ -28,7 +27,7 @@ def cycle(loader, cond = lambda x: True):
 
 def get_bucketed_distance_matrix(coords, mask):
     distances = torch.cdist(coords, coords, p=2)
-    boundaries = torch.linspace(2, 20, steps = DISTANCE_BINS, device = coords.device)
+    boundaries = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS, device = coords.device)
     discretized_distances = torch.bucketize(distances, boundaries[:-1])
     discretized_distances.masked_fill_(~(mask[:, :, None] & mask[:, None, :]), IGNORE_INDEX)
     return discretized_distances
