@@ -4,11 +4,14 @@ import numpy as np
 import torch
 # bio
 import mdtraj
-from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
+try:
+    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
+except:
+    NUM_COORDS_PER_RES = 14
+# own
+from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
 
 # constants: same as in alphafold2.py
-
-DISTOGRAM_BUCKETS = 37
 DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
 
 # common utils
@@ -168,33 +171,40 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
 def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
+        Outs: 
+        * best_3d_coords: (3 x N)
+        * historic_stress 
     """
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
-    N = pre_dist_mat.shape[-1]
+    # batched MDS
+    if len(pre_dist_mat.shape) < 3:
+        pre_dist_mat.unsqueeze_(0)
+    # start
+    batch, N, _ = pre_dist_mat.shape
     his = []
     # init random coords
-    best_stress = float("Inf") 
-    best_3d_coords = 2*torch.rand(3, N) - 1
+    best_stress = float("Inf") * torch.ones(batch) 
+    best_3d_coords = 2*torch.rand(batch, N, 3) - 1
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
-        dist_mat = torch.cdist(best_3d_coords.t(), best_3d_coords.t(), p=2)
-        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum() / 2
+        dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2)
+        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) / 2
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-5
         ratio = weights * (pre_dist_mat / dist_mat)
         B = ratio * (-1)
-        B[np.arange(N), np.arange(N)] += ratio.sum(dim=1)
+        B[:, np.arange(N), np.arange(N)] += ratio.sum(dim=-1)
         # update - double transpose. TODO: consider fix
-        coords = (1. / N * torch.matmul(best_3d_coords, B))
-        dis = torch.sqrt((coords ** 2).sum(axis=1)).sum()
+        coords = (1. / N * torch.matmul(B, best_3d_coords))
+        dis = torch.norm(coords, dim=(-1, -2))
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
-        if(best_stress - stress / dis) > tol:
+        if (best_stress - stress / dis).mean() > tol:
             best_3d_coords = coords
-            best_stress = (stress / dis).item()
+            best_stress = (stress / dis)
             his.append(best_stress)
         else:
             if verbose:
@@ -202,7 +212,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
                                                                    stress))
             break
 
-    return best_3d_coords, torch.tensor(his)
+    return torch.transpose(best_3d_coords, -1,-2), torch.cat(his)
 
 def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
@@ -230,7 +240,7 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
         # update - double transpose. TODO: consider fix
         coords = (1. / N * np.dot(best_3d_coords, B))
-        dis = np.sqrt((coords ** 2).sum(axis=1)).sum()
+        dis = np.linalg.norm(coords)
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
@@ -275,12 +285,12 @@ def get_dihedral_numpy(c1, c2, c3, c4, c5):
     return np.arctan2( np.dot( np.linalg.norm(u2) * u1, np.cross(u3,u4) ),  
                        np.dot( np.cross(u1,u2), np.cross(u3, u4) ) ) 
 
-def fix_mirrors_torch(preds, N_mask, CA_mask, verbose=0):
+def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
     """ 
-    preds_ = torch.cat([x[0].detach().unsqueeze(0) for x in preds], dim=0)
+    preds_ = preds.detach()
     ns = torch.transpose(preds_, -1, -2)[:, N_mask][:, 1:]
     cs = torch.transpose(preds_, -1, -2)[:, CA_mask]
     # compute phis and count lower than 0s
@@ -290,20 +300,21 @@ def fix_mirrors_torch(preds, N_mask, CA_mask, verbose=0):
         phis = [ get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
                  for j in range(1, cs.shape[1]-1) ]
 
-        phis_count.append( (torch.tensor(phis)<0).float().sum() )
+        phis_count.append( (np.array(phis)<0).sum() )
+
+    idx = np.argmax(phis_count)
     # debugging/testing if arg passed
     if verbose:
-        print("Negative phis:", phis_count)
-    return preds[torch.argmax(torch.tensor(phis_count))]
+        print("Negative phis:", phis_count, "selected", idx)
+    return preds[idx], stresses[idx]
 
-def fix_mirrors_numpy(preds, N_mask, CA_mask, verbose=0):
+def fix_mirrors_numpy(preds, stresses, N_mask, CA_mask, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
     """ 
-    preds_ = np.array([x[0] for x in preds])
-    ns = np.transpose(preds_, (0, 2, 1))[N_mask][1:]
-    cs =  np.transpose(preds_, (0, 2, 1))[CA_mask]
+    ns = np.transpose(preds, (0, 2, 1))[:, N_mask][:, 1:]
+    cs =  np.transpose(preds, (0, 2, 1))[:, CA_mask]
     # compute phis and count lower than 0s
     phis_count = []
     for i in range(cs.shape[0]):
@@ -312,10 +323,12 @@ def fix_mirrors_numpy(preds, N_mask, CA_mask, verbose=0):
                  for j in range(1, cs.shape[1]-1) ]
 
         phis_count.append( (np.array(phis)<0).sum() )
+
+    idx = np.argmax(phis_count)
     # debugging/testing if arg passed
     if verbose:
         print("Negative phis:", phis_count)
-    return preds[np.argmax(np.array(phis_count))]
+    return preds[idx], stresses[idx]
 
 
 # alignment by centering + rotation to compute optimal RMSD
@@ -457,7 +470,7 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
         * verbose: whether to print logs
         Outputs:
         * best_3d_coords: (3 x N)
-        * historic_stress: list
+        * historic_stress: (timesteps, )
     """
     if backend == "auto":
         if isinstance(pre_dist_mat, torch.Tensor):
@@ -466,21 +479,25 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
             backend = "numpy"
     # run calcs     
     if backend == "torch":
-        preds = [mds_torch(pre_dist_mat, weights=weights,iters=iters, 
-                                      tol=tol, verbose=verbose) \
-                 for i in range( max(1,fix_mirror) )]
+        pre_dist_mat.unsqueeze_(0)
+        pre_dist_mat = torch.repeat_interleave(pre_dist_mat, max(1,fix_mirror), dim=0)
+        # batched mds for full parallel 
+        preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
+                                                  tol=tol, verbose=verbose)
         if not fix_mirror:
-            return preds[0]
+            return preds[0], stresses[0]
         else:
-            return fix_mirrors_torch(preds, N_mask, CA_mask)
+            return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
     else:
         preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
-                                      tol=tol, verbose=verbose) \
+                                         tol=tol, verbose=verbose) \
                  for i in range( max(1,fix_mirror) )]
+
         if not fix_mirror:
             return preds[0]
         else:
-            return fix_mirrors_numpy(preds, N_mask, CA_mask)
+            return fix_mirrors_numpy([x[0] for x in preds],
+                                     [x[1] for x in preds], N_mask, CA_mask)
 
 
 def Kabsch(A, B, backend="auto"):
