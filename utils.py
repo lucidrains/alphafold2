@@ -5,10 +5,10 @@ import torch
 # bio
 import mdtraj
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
+# own
+from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
 
 # constants: same as in alphafold2.py
-
-DISTOGRAM_BUCKETS = 37
 DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
 
 # common utils
