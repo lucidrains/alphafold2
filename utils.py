@@ -153,7 +153,11 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist 
-    central[np.arange(shape[-2]), np.arange(shape[-3])] = 0.
+    diag = np.arange(shape[-2])
+    if len(central.shape) == 3: 
+        central[:, diag, diag] = 0.
+    else:
+        central[diag, diag] = 0.
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
