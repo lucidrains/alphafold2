@@ -130,8 +130,7 @@ def scn_seq_mask(scn_seq, bool=True):
 def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
         Inputs:
-        * distogram: (N x N x B) where B is the number of buckets. 
-                     Supports batched predictions (batch x N x N x B)
+        * distogram: (N x N x B) where B is the number of buckets.
         * bins: (B,) containing the cutoffs for the different buckets
         * min_t: float. lower bound for distances.
         TODO: return confidence/weights
@@ -148,7 +147,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
         cum_dist = torch.cumsum(distogram, dim=-1)
         medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=cum_dist.device).unsqueeze(dim=-1)
         central  = torch.searchsorted(cum_dist, medium).squeeze()
-        central  = n_bins[torch.maximum(central, torch.tensor(DISTOGRAM_BUCKETS-1)).long()]
+        central  = n_bins[ torch.maximum(central, torch.tensor(DISTOGRAM_BUCKETS-1)).long() ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   
@@ -455,8 +454,9 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
+        For support of ditograms: see `center_distogram_torch()`
         Inputs:
-        * distogram: (N x N) distance matrix. TODO: support probabilities
+        * distogram: (N x N) distance matrix.
         * weights: optional. (N x N) pairwise relative weights .
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
