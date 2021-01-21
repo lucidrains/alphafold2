@@ -146,7 +146,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # calculate measures of centrality and dispersion - 
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
-        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1]).unsqueeze(dim=-1)
+        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=cum_dist.device).unsqueeze(dim=-1)
         central  = torch.searchsorted(cum_dist, medium).squeeze()
         central  = n_bins[central.long()]
     elif center == "mean":
