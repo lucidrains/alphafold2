@@ -161,7 +161,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     elif wide == "std":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
-        dispersion = torch.zeros_like(central)
+        dispersion = torch.zeros_like(central, device=central.device)
     # rescale to 0-1. lower std / var  --> weight=1
     weights = mask / (1+dispersion)
 
