@@ -130,8 +130,8 @@ def scn_seq_mask(scn_seq, bool=True):
 def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
         Inputs:
-        * distogram: (N x N x B) where B is the number of buckets. 
-                     Supports batched predictions (batch x N x N x B)
+        * distogram: (N x N x B) where B is the number of buckets.
+                     supports batched predictions (batch, N, N, B).
         * bins: (B,) containing the cutoffs for the different buckets
         * min_t: float. lower bound for distances.
         TODO: return confidence/weights
@@ -146,21 +146,26 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # calculate measures of centrality and dispersion - 
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
-        central  = torch.searchsorted(cum_dist, 0.5)
-        central  = n_bins[central.long()]
+        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=cum_dist.device).unsqueeze(dim=-1)
+        central  = torch.searchsorted(cum_dist, medium).squeeze()
+        central  = n_bins[ torch.minimum(central, torch.tensor(DISTOGRAM_BUCKETS-1)).long() ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist 
-    central[np.arange(shape[-2]), np.arange(shape[-3])] = 0.
+    diag = np.arange(shape[-2])
+    if len(central.shape) == 3: 
+        central[:, diag, diag] = 0.
+    else:
+        central[diag, diag] = 0.
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
     elif wide == "std":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
-        dispersion = torch.zeros_like(central)
+        dispersion = torch.zeros_like(central, device=central.device)
     # rescale to 0-1. lower std / var  --> weight=1
     weights = mask / (1+dispersion)
 
@@ -192,7 +197,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2)
         stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) / 2
         # perturb - update X using the Guttman transform - sklearn-like
-        dist_mat[dist_mat == 0] = 1e-5
+        dist_mat[dist_mat == 0] = 1e-7
         ratio = weights * (pre_dist_mat / dist_mat)
         B = ratio * (-1)
         B[:, np.arange(N), np.arange(N)] += ratio.sum(dim=-1)
@@ -234,7 +239,7 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=0)
         stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() / 2
         # perturb - update X using the Guttman transform - sklearn-like
-        dist_mat[dist_mat == 0] = 1e-5
+        dist_mat[dist_mat == 0] = 1e-7
         ratio = pre_dist_mat / dist_mat
         B = ratio * (-1)
         B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
@@ -454,8 +459,9 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
+        For support of ditograms: see `center_distogram_torch()`
         Inputs:
-        * distogram: (N x N) distance matrix. TODO: support probabilities
+        * distogram: (N x N) distance matrix.
         * weights: optional. (N x N) pairwise relative weights .
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
