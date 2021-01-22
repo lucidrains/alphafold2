@@ -10,11 +10,22 @@ from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 
 # constants
 
+DEVICE = None # defaults to cuda if available, else cpu
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
+
+# set device
+
+if DEVICE is None:
+    if torch.cuda.is_available():
+        DEVICE = torch.device("cuda")
+    else:
+        DEVICE = torch.device("cpu")
+else:
+    DEVICE = torch.device(DEVICE)
 
 # helpers
 
@@ -54,7 +65,7 @@ model = Alphafold2(
     depth = 1,
     heads = 8,
     dim_head = 64
-).cuda()
+).to(DEVICE)
 
 # optimizer
 
@@ -69,7 +80,7 @@ for _ in range(NUM_BATCHES):
 
         # prepare mask, labels
 
-        seq, coords, mask = seq.cuda(), coords.cuda(), mask.cuda().bool()
+        seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
         discretized_distances = get_bucketed_distance_matrix(coords, mask)
