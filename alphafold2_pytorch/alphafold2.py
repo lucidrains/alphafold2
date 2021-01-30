@@ -10,6 +10,7 @@ from einops import rearrange, repeat
 
 MAX_NUM_MSA = 20
 NUM_AMINO_ACIDS = 21
+NUM_EMBEDDS_TR  = 1280 # best esm model 
 DISTOGRAM_BUCKETS = 37
 
 # helpers
@@ -144,12 +145,13 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
-        num_tokens = 21,
+        num_tokens = NUM_AMINO_ACIDS,
+        num_embedds = NUM_EMBEDDS_TR,
         attn_dropout = 0.,
         ff_dropout = 0.
     ):
         super().__init__()
-        self.token_emb = nn.Embedding(NUM_AMINO_ACIDS, dim)
+        self.token_emb = nn.Embedding(num_tokens, dim)
 
         self.pos_emb = nn.Embedding(max_seq_len, dim)
 
@@ -157,6 +159,10 @@ class Alphafold2(nn.Module):
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
         self.msa_num_pos_emb = nn.Embedding(MAX_NUM_MSA, dim)
+
+        # custom embedding projection
+
+        self.embedd_project = nn.Linear(num_embedds, dim)
 
         wrapper = partial(PreNorm, dim)
 
@@ -180,7 +186,7 @@ class Alphafold2(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
 
-    def forward(self, seq, msa = None, mask = None, msa_mask = None):
+    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
         n, device = seq.shape[1], seq.device
 
         # embed main sequence
@@ -199,6 +205,12 @@ class Alphafold2(nn.Module):
             m += self.msa_pos_emb(torch.arange(msa_shape[-1], device = device))[None, None, ...]
             m += self.msa_num_pos_emb(torch.arange(msa_shape[1], device = device))[None, :, None, :]
 
+            m = rearrange(m, 'b m n d -> b (m n) d')
+
+        elif exists(embedds):
+            m = self.embedd_project(embedds)
+            # pairwise mat - maybe repeating stuff? 
+            m = m[:, :, None, :] + m[:, None, :, :]
             m = rearrange(m, 'b m n d -> b (m n) d')
 
         if exists(msa_mask):
