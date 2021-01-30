@@ -58,6 +58,13 @@ $ git clone https://github.com/jonathanking/sidechainnet.git
 $ cd sidechainnet && pip install -e .
 ```
 
+## Related repositories
+
+I have started construction of two approaches to equivariant self-attention. Both are still works in progress but should be done by end of January. Feel free to contribute.
+
+- [ ] https://github.com/lucidrains/lie-transformer-pytorch
+- [x] https://github.com/lucidrains/se3-transformer-pytorch
+
 ## Speculation
 
 https://fabianfuchsml.github.io/alphafold2/
