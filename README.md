@@ -62,8 +62,8 @@ $ cd sidechainnet && pip install -e .
 
 I have started construction of two approaches to equivariant self-attention. Both are still works in progress but should be done by end of January. Feel free to contribute.
 
-1. https://github.com/lucidrains/lie-transformer-pytorch
-2. https://github.com/lucidrains/se3-transformer-pytorch
+- [ ] https://github.com/lucidrains/lie-transformer-pytorch
+- [x] https://github.com/lucidrains/se3-transformer-pytorch
 
 ## Speculation
 
