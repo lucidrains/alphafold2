@@ -5,17 +5,43 @@ import torch.nn.functional as F
 from einops import rearrange
 
 import sidechainnet as scn
+from sidechainnet.sequence.utils import VOCAB
+
 from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 from utils import *
 
 
 # constants
 
+FEATURES = "esm" # one of ["esm", "msa"]
+DEVICE = None # defaults to cuda if available, else cpu
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
+
+# set device
+
+if DEVICE is None:
+    if torch.cuda.is_available():
+        DEVICE = torch.device("cuda")
+    else:
+        DEVICE = torch.device("cpu")
+else:
+    DEVICE = torch.device(DEVICE)
+
+# set emebdder model from esm if appropiate - Load ESM-1b model
+
+if FEATURES == "esm":
+    # from pytorch hub (almost 30gb)
+    embedd_model, alphabet = torch.hub.load("facebookresearch/esm", "esm1b_t33_650M_UR50S")
+    ##  alternatively do
+    # import esm # after installing esm
+    # model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+    batch_converter = alphabet.get_batch_converter()
+
+
 
 # helpers
 
@@ -48,7 +74,7 @@ model = Alphafold2(
     depth = 1,
     heads = 8,
     dim_head = 64
-).cuda()
+).to(DEVICE)
 
 # optimizer 
 dispersion_weight = 0.1
@@ -64,12 +90,29 @@ for _ in range(NUM_BATCHES):
 
         # prepare mask, labels
 
-        seq, coords, mask = seq.cuda(), coords.cuda(), mask.cuda().bool()
+        seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
-        # predict
+        # sequence embedding (msa / esm)
+        if FEATURES == "esm":
+            # set no msa
+            msa = None
+            # get embeddss
+            str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
+            data = [(0, str_seq)]
+            batch_labels, batch_strs, batch_tokens = batch_converter(data)
+            with torch.no_grad():
+                results = model(batch_tokens, repr_layers=[33], return_contacts=False)
+            embedds = results["representations"][33]
+                
+        else:
+            # set embdedds
+            embedds = None
+            # get msa here
+            msa = None
 
-        distogram = model(seq, mask = mask)
+        # predict
+        distogram = model(seq, msa = msa, embedds = embedds, mask = mask)
 
         # convert to 3d
         N_mask, CA_mask = scn_seq_mask(seq)
