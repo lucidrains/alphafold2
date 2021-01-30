@@ -6,8 +6,8 @@ setup(
   version = '0.0.5',
   license='MIT',
   description = 'AlphaFold2 - Pytorch',
-  author = 'Phil Wang',
-  author_email = 'lucidrains@gmail.com',
+  author = 'Phil Wang, Eric Alcaide',
+  author_email = 'lucidrains@gmail.com, ericalcaide1@gmail.com',
   url = 'https://github.com/lucidrains/alphafold2',
   keywords = [
     'artificial intelligence',
