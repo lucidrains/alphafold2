@@ -115,8 +115,6 @@ for _ in range(NUM_BATCHES):
 
         # predict
         distogram = model(seq, msa = msa, embedds = embedds, mask = mask)
-        distogram = distogram[:, mask]
-        distogram = distogram[:, :, mask]
 
         # convert to 3d
         N_mask, CA_mask = scn_backbone_mask(seq)
