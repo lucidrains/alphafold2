@@ -67,6 +67,8 @@ I have started construction of two approaches to equivariant self-attention. Bot
 
 ## Speculation
 
+https://xukui.cn/alphafold2.html
+
 https://fabianfuchsml.github.io/alphafold2/
 
 https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-ones-child-has-left-home/
