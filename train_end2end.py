@@ -3,17 +3,17 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from einops import rearrange
-
+# data
 import sidechainnet as scn
 from sidechainnet.sequence.utils import VOCAB
-
+# models
 from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 from utils import *
 
 
 # constants
 
-FEATURES = "esm" # one of ["esm", "msa"]
+FEATURES = "esm" # one of ["esm", "msa", None]
 DEVICE = None # defaults to cuda if available, else cpu
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
@@ -76,6 +76,7 @@ model = Alphafold2(
     dim_head = 64
 ).to(DEVICE)
 
+
 # optimizer 
 dispersion_weight = 0.1
 criterion = nn.MSELoss()
@@ -88,35 +89,37 @@ for _ in range(NUM_BATCHES):
         _, seq, _, mask, *_, coords = next(dl)
         b, l = seq.shape
 
-        # prepare mask, labels
+        # prepare data and mask labels
 
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
-        coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
+        # mask the atoms for each residue
+        cloud_mask = scn_cloud_mask(seq, bool=True)
 
-        # sequence embedding (msa / esm)
+
+        # sequence embedding (msa / esm / attn / or nothing)
+        msa, embedds = None
+        # get embedds
         if FEATURES == "esm":
-            # set no msa
-            msa = None
-            # get embeddss
             str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
             data = [(0, str_seq)]
             batch_labels, batch_strs, batch_tokens = batch_converter(data)
             with torch.no_grad():
                 results = model(batch_tokens, repr_layers=[33], return_contacts=False)
-            embedds = results["representations"][33]
-                
+            embedds = results["representations"][33].to(DEVICE)
+        # get msa here
+        elif FEATURES == "msa":
+            pass 
+        # no embeddings 
         else:
-            # set embdedds
-            embedds = None
-            # get msa here
-            msa = None
+            pass
 
         # predict
         distogram = model(seq, msa = msa, embedds = embedds, mask = mask)
 
         # convert to 3d
-        N_mask, CA_mask = scn_seq_mask(seq)
-        distances, dispersion, weights = center_distogram_torch(distogram)
+        N_mask, CA_mask = scn_backbone_mask(seq)
+        distances, weights = center_distogram_torch(distogram)
+
 
         coords_3d = MDScaling(distances, 
             weights,
@@ -124,18 +127,22 @@ for _ in range(NUM_BATCHES):
             fix_mirror = 5, 
             N_mask = N_mask,
             CA_mask = CA_mask
-        ) 
+        ) # (3, N)
+        coords_3d = rearrange(coords_3d, 'd n -> () n d')
+
+        # # TODO: build whole sidechain
+        # sidechain_3d = build_sidechain(coords_3d)
+        cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l)
 
         # refine
-
-        # TODO: coords_align = refiner(coords_align)
+        # refined = refiner(coords_3d[cloud_mask]) # (1, N, 3)
 
         # rotate / align
-
-        coords_aligned = Kabsch(coords_3d, coords)
+        coords_aligned = Kabsch(refined, scaffold[cloud_mask])
 
         # loss
-        loss = torch.sqrt(criterion(coords_aligned, coords)) + dispersion_weight * torch.norm(dispersion)
+        loss = torch.sqrt(criterion(coords_aligned[mask], coords[mask])) + \
+               dispersion_weight * torch.norm( (1/weights)-1 )
 
         loss.backward()
 

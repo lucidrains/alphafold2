@@ -5,7 +5,8 @@ import torch
 # bio
 import mdtraj
 try:
-    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
+    from sidechainnet.sequence.utils import VOCAB
+    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, SC_BUILD_INFO
 except:
     NUM_COORDS_PER_RES = 14
 # own
@@ -111,14 +112,30 @@ def custom2pdb(coords, proteinnet_id, route):
 
 # distance utils (distogram to dist mat + masking)
 
-def scn_seq_mask(scn_seq, bool=True):
+
+def scn_cloud_mask(scn_seq, bool=True):
+    """ Gets the boolean mask atom positions (not all aas have same atoms). 
+        Inputs: 
+        * scn_seq: (batch, length) sequence as provided by Sidechainnet package
+        * bool: whether to return as array of idxs or boolean values
+        Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask
+    """
+    mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=snc_seq.device)
+    for n in range(len(masks)):
+        for i,aa in enumerate(scn_seq.cpu().numpy()):
+            # get num of atom positions - backbone is 4: ...N-C-C(=O)...
+            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(x)]["atom-names"] )
+            mask[n, i, :n_atoms] = 1
+    return mask.bool()
+
+def scn_backbone_mask(scn_seq, bool=True):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
         * scn_seq: sequence as provided by Sidechainnet package
         * bool: whether to return as array of idxs or boolean values
         Outputs: (N_mask, CA_mask)
     """
-    lengths = np.arange(len(scn_seq)*NUM_COORDS_PER_RES)
+    lengths = np.arange(scn_seq.shape[-1]*NUM_COORDS_PER_RES)
     # N is the first atom in every AA. CA is the 2nd.
     N_mask  = lengths%NUM_COORDS_PER_RES == 0
     CA_mask = lengths%NUM_COORDS_PER_RES == 1
@@ -130,11 +147,13 @@ def scn_seq_mask(scn_seq, bool=True):
 def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
         Inputs:
-        * distogram: (N x N x B) where B is the number of buckets.
-                     supports batched predictions (batch, N, N, B).
+        * distogram: (batch, N, N, B) where B is the number of buckets.
         * bins: (B,) containing the cutoffs for the different buckets
         * min_t: float. lower bound for distances.
-        TODO: return confidence/weights
+        Outputs:
+        * central: (batch, N, N)
+        * dispersion: (batch, N, N)
+        * weights: (batch, N, N)
     """
     shape = distogram.shape
     # threshold to weights and find mean value of each bin
@@ -155,10 +174,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist 
     diag = np.arange(shape[-2])
-    if len(central.shape) == 3: 
-        central[:, diag, diag] = 0.
-    else:
-        central[diag, diag] = 0.
+    central[:, diag, diag] = 0.
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
@@ -169,7 +185,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # rescale to 0-1. lower std / var  --> weight=1
     weights = mask / (1+dispersion)
 
-    return central, dispersion, weights
+    return central, weights
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
@@ -461,7 +477,7 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
         Assumes (for now) distrogram is (N x N) and symmetric.
         For support of ditograms: see `center_distogram_torch()`
         Inputs:
-        * distogram: (N x N) distance matrix.
+        * distogram: (1, N, N) distance matrix.
         * weights: optional. (N x N) pairwise relative weights .
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
@@ -485,7 +501,7 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
             backend = "numpy"
     # run calcs     
     if backend == "torch":
-        pre_dist_mat.unsqueeze_(0)
+        # repeat for mirrors calculations
         pre_dist_mat = torch.repeat_interleave(pre_dist_mat, max(1,fix_mirror), dim=0)
         # batched mds for full parallel 
         preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
