@@ -104,7 +104,7 @@ for _ in range(NUM_BATCHES):
             data = [(0, str_seq)]
             batch_labels, batch_strs, batch_tokens = batch_converter(data)
             with torch.no_grad():
-                results = model(batch_tokens, repr_layers=[33], return_contacts=False)
+                results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
             embedds = results["representations"][33].to(DEVICE)
         # get msa here
         elif FEATURES == "msa":
