@@ -6,12 +6,7 @@ import torch.nn.functional as F
 
 from einops import rearrange, repeat
 
-# constants
-
-MAX_NUM_MSA = 20
-NUM_AMINO_ACIDS = 21
-NUM_EMBEDDS_TR  = 1280 # best esm model 
-DISTOGRAM_BUCKETS = 37
+import alphafold2_pytorch.constants as constants
 
 # helpers
 
@@ -146,8 +141,8 @@ class Alphafold2(nn.Module):
         heads = 8,
         dim_head = 64,
         pos_token = 3,
-        num_tokens = NUM_AMINO_ACIDS,
-        num_embedds = NUM_EMBEDDS_TR,
+        num_tokens = constants.NUM_AMINO_ACIDS,
+        num_embedds = constants.NUM_EMBEDDS_TR,
         attn_dropout = 0.,
         ff_dropout = 0.
     ):
@@ -159,7 +154,7 @@ class Alphafold2(nn.Module):
         # multiple sequence alignment position embedding
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(MAX_NUM_MSA, dim)
+        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA, dim)
 
         # custom embedding projection
 
@@ -185,7 +180,7 @@ class Alphafold2(nn.Module):
             ]))
 
         self.norm = nn.LayerNorm(dim)
-        self.to_distogram_logits = nn.Linear(dim, DISTOGRAM_BUCKETS)
+        self.to_distogram_logits = nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
 
     def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
         n, device = seq.shape[1], seq.device

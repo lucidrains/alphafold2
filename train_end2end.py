@@ -10,7 +10,9 @@ from sidechainnet.sequence.utils import VOCAB
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 
 # models
-from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
+from alphafold2_pytorch import Alphafold2
+import alphafold2_pytorch.constants as constants
+
 from se3_transformer_pytorch import SE3Transformer
 from alphafold2_pytorch.utils import *
 
@@ -27,13 +29,8 @@ THRESHOLD_LENGTH = 250
 
 # set device
 
-if DEVICE is None:
-    if torch.cuda.is_available():
-        DEVICE = torch.device("cuda")
-    else:
-        DEVICE = torch.device("cpu")
-else:
-    DEVICE = torch.device(DEVICE)
+DEVICE = constants.DEVICE
+DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
 
 # set emebdder model from esm if appropiate - Load ESM-1b model
 
@@ -44,8 +41,6 @@ if FEATURES == "esm":
     # import esm # after installing esm
     # model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
     batch_converter = alphabet.get_batch_converter()
-
-
 
 # helpers
 
@@ -98,9 +93,8 @@ refiner = SE3Transformer(
     reduce_dim_out = True
 )
 
-
-
 # optimizer 
+
 dispersion_weight = 0.1
 criterion = nn.MSELoss()
 optim = Adam(model.parameters(), lr = LEARNING_RATE)

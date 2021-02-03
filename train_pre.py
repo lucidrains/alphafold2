@@ -5,7 +5,8 @@ import torch.nn.functional as F
 from einops import rearrange
 
 import sidechainnet as scn
-from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
+from alphafold2_pytorch import Alphafold2
+import alphafold2_pytorch.constants as constants
 
 
 # constants
@@ -19,13 +20,8 @@ THRESHOLD_LENGTH = 250
 
 # set device
 
-if DEVICE is None:
-    if torch.cuda.is_available():
-        DEVICE = torch.device("cuda")
-    else:
-        DEVICE = torch.device("cpu")
-else:
-    DEVICE = torch.device(DEVICE)
+DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
+DEVICE = constants.DEVICE
 
 # helpers
 

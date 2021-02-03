@@ -17,11 +17,12 @@ except:
     GLOBAL_PAD_CHAR = 0
 
 # own
-from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
+
+import alphafold2_pytorch.constants as constants
 
 # constants: same as in alphafold2.py
 
-DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
+DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = constants.DISTOGRAM_BUCKETS)
 
 # decorators
 
@@ -31,11 +32,15 @@ def set_backend_kwarg(fn):
         if backend == 'auto':
             backend = 'torch' if isinstance(args[0], torch.Tensor) else 'numpy'
         kwargs.update(backend = backend)
-        print('settinb backend kwargs', backend, kwargs)
         return fn(*args, **kwargs)
     return inner
 
-def cast_num_dimensions(dim_len = 3):
+def expand_dims_to(t, len = 3):
+    if len == 0:
+        return t
+    return t.reshape(*((1,) * len), *t.shape) # will work with both torch and numpy
+
+def expand_arg_dims(dim_len = 3):
     """ pack here for reuse. 
         turns input into (B x D x N)
     """
@@ -44,8 +49,8 @@ def cast_num_dimensions(dim_len = 3):
         def inner(x, y, **kwargs):
             assert len(x.shape) == len(y.shape), "Shapes of A and B must match."
             remaining_len = len(x.shape) - dim_len
-            x = x.reshape(*((1,) * remaining_len), *x.shape) # will work with both torch and numpy
-            y = y.reshape(*((1,) * remaining_len), *y.shape)
+            x = expand_dims_to(x, remaining_len)
+            y = expand_dims_to(y, remaining_len)
             return fn(x, y, **kwargs)
         return inner
     return outer
@@ -54,7 +59,6 @@ def invoke_torch_or_numpy(torch_fn, numpy_fn):
     def outer(fn):
         @wraps(fn)
         def inner(*args, **kwargs):
-            print('getting')
             backend = kwargs.pop('backend')
             passed_args, passed_kwargs = fn(*args, **kwargs)
             backend_fn = torch_fn if backend == 'torch' else numpy_fn
@@ -74,7 +78,7 @@ def download_pdb(name, route):
         * route: str. route of the destin file. usually ".pdb" extension
         Output: route of destin file
     """
-    os.system("curl https://files.rcsb.org/download/{0}.pdb > {1}".format(name, route))
+    os.system(f"curl https://files.rcsb.org/download/{name}.pdb > {route}")
     return route
 
 def clean_pdb(name, route=None, chain_num=None):
@@ -96,7 +100,7 @@ def clean_pdb(name, route=None, chain_num=None):
             if chain_num != chain.index:
                 continue
         # select indexes of chain
-        chain_idxs = raw_prot.topology.select("chainid == {0}".format(chain.index))
+        chain_idxs = raw_prot.topology.select(f"chainid == {str(chain.index)}")
         idxs.extend( chain_idxs.tolist() )
     # sort: topology and xyz selection are ordered
     idxs = sorted(idxs)
@@ -232,7 +236,6 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
         medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=device).unsqueeze(dim=-1)
-        central  = torch.searchsorted(cum_dist, medium).squeeze()
         central  = n_bins[ torch.minimum(central, torch.tensor( len(n_bins)-1 )).long() ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
@@ -262,17 +265,20 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         * best_3d_coords: (3 x N)
         * historic_stress 
     """
+    device = pre_dist_mat.device
+
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
+
     # batched MDS
-    if len(pre_dist_mat.shape) < 3:
-        pre_dist_mat.unsqueeze_(0)
+    pre_dist_mat = expand_dims_to(pre_dist_mat, len = (len(pre_dist_mat) - 3))
+
     # start
     batch, N, _ = pre_dist_mat.shape
     his = []
     # init random coords
-    best_stress = float("Inf") * torch.ones(batch) 
-    best_3d_coords = 2*torch.rand(batch, N, 3) - 1
+    best_stress = float("Inf") * torch.ones(batch, device = device)
+    best_3d_coords = 2*torch.rand(batch, N, 3, device = device) - 1
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
@@ -585,7 +591,7 @@ def MDScaling(pre_dist_mat, **kwargs):
     """
     return pre_dist_mat, kwargs
 
-@cast_num_dimensions(dim_len = 2)
+@expand_arg_dims(dim_len = 2)
 @set_backend_kwarg
 @invoke_torch_or_numpy(kabsch_torch, kabsch_numpy)
 def Kabsch(A, B):
@@ -600,7 +606,7 @@ def Kabsch(A, B):
     # run calcs - pick the 0th bc an additional dim was created
     return A, B
 
-@cast_num_dimensions()
+@expand_arg_dims()
 @set_backend_kwarg
 @invoke_torch_or_numpy(rmsd_torch, rmsd_numpy)
 def RMSD(A, B):
@@ -614,7 +620,7 @@ def RMSD(A, B):
     """
     return A, B
 
-@cast_num_dimensions()
+@expand_arg_dims()
 @set_backend_kwarg
 @invoke_torch_or_numpy(gdt_torch, gdt_numpy)
 def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
@@ -633,7 +639,7 @@ def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
     # calculate GDT
     return (A, B, cutoffs), {'weights': weights}
 
-@cast_num_dimensions()
+@expand_arg_dims()
 @set_backend_kwarg
 @invoke_torch_or_numpy(tmscore_torch, tmscore_numpy)
 def TMscore(A, B):
