@@ -168,8 +168,9 @@ for _ in range(NUM_BATCHES):
         sidechain_3d = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
         
         ## refine
-        atom_tokens = torch.ones(*mask.shape) # sample tokens for now
-        refined = refiner(atom_tokens, sidechain_3d[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
+        # sample tokens for now based on indices
+        atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=mask.shape[0]) % NUM_COORDS_PER_RES
+        refined = refiner(atom_tokens[cloud_mask], sidechain_3d[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
         coords_aligned = Kabsch(refined, coords[cloud_mask])
