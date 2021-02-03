@@ -227,7 +227,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     """
     shape, device = distogram.shape, distogram.device
     # threshold to weights and find mean value of each bin
-    n_bins = bins - 0.5 * (bins[2] - bins[2])
+    n_bins = bins - 0.5 * (bins[2] - bins[1])
     n_bins[0]  = 1.5
     # TODO: adapt so that mean option considers IGNORE_INDEX
     n_bins[-1] = n_bins[-1]
@@ -236,8 +236,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
         medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=device).unsqueeze(dim=-1)
-        central  = torch.searchsorted(cum_dist, medium).squeeze()
-        central  = n_bins[ torch.minimum(central, torch.tensor(constants.DISTOGRAM_BUCKETS-1)).long() ]
+        central  = n_bins[ torch.minimum(central, torch.tensor( len(n_bins)-1 )).long() ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   
