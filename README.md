@@ -68,6 +68,8 @@ $ cd sidechainnet && pip install -e .
 
 I have started construction of two approaches to equivariant self-attention. Both are still works in progress but should be done by end of January. Feel free to contribute.
 
+Update - SE3 Transformers is in a good place, but Lie Transformer could use a code review, specifically how the location attention is handled
+
 - [ ] https://github.com/lucidrains/lie-transformer-pytorch
 - [x] https://github.com/lucidrains/se3-transformer-pytorch
 
