@@ -2,6 +2,7 @@
 import os
 import numpy as np 
 import torch
+from functools import wraps
 from einops import rearrange, repeat
 # bio
 import mdtraj
@@ -16,35 +17,54 @@ except:
 from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
 
 # constants: same as in alphafold2.py
+
 DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
 
-# common utils
+# decorators
 
-def shape_and_backend(x,y,backend):
+def set_backend_kwarg(fn):
+    @wraps(fn)
+    def inner(*args, **kwargs):
+        backend = kwargs.pop('backend')
+        if backend == 'auto':
+            backend = 'torch' if isinstance(args[0], torch.Tensor) else 'numpy'
+        kwargs.update(backend = backend)
+
+        return fn(*args, **kwargs)
+    return inner
+
+def cast_num_dimensions(dim_len = 3):
     """ pack here for reuse. 
-        turns input into (B x D x N) and chooses backend
+        turns input into (B x D x N)
     """
-    # auto type infer mode
-    if backend == "auto":
-        backend = "torch" if isinstance(x, torch.Tensor) else "numpy"
-    # check shapes
-    if len(x.shape) == len(y.shape):
-        while len(x.shape) < 3:
-            if backend == "torch":
-                x = x.unsqueeze(dim=0)
-                y = y.unsqueeze(dim=0)
-            else:
-                x = np.expand_dims(x, axis=0)
-                y = np.expand_dims(y, axis=0)
-    else:
-        raise ValueError("Shapes of A and B must match.")
+    def outer(fn):
+        @wraps(fn)
+        def inner(x, y, **kwargs):
+            assert len(x.shape) == len(y.shape), "Shapes of A and B must match."
+            remaining_len = len(x.shape) - dim_len
+            x = x.reshape(*((1,) * remaining_len), *x.shape) # will work with both torch and numpy
+            y = y.reshape(*((1,) * remaining_len), *y.shape)
+            return fn(x, y, **kwargs)
+        return inner
+    return outer
 
-    return x,y,backend
+def invoke_torch_or_numpy(torch_fn, numpy_fn):
+    def outer(fn):
+        @wraps(fn)
+        def inner(*args, **kwargs):
+            backend = kwargs.pop('backend')
+            passed_args, passed_kwargs = fn(*args, **kwargs)
+            backend_fn = torch_fn if backend == 'torch' else numpy_fn
+            return backend_fn(*passed_args, **passed_kwargs)
+        return inner
+    return outer
+
+# common utils
 
 # parsing to pdb for easier visualization - other example from sidechainnet is:
 # https://github.com/jonathanking/sidechainnet/tree/master/sidechainnet/structure
 
-def downloadPDB(name, route):
+def download_pdb(name, route):
     """ Downloads a PDB entry from the RCSB PDB. 
         Inputs:
         * name: str. the PDB entry id. 4 characters, capitalized.
@@ -104,7 +124,7 @@ def custom2pdb(coords, proteinnet_id, route):
     pdb_name, china_num = proteinnet_id.split("#")[-1].split("_")[:-1]
     pdb_destin = "/".join(route.split("/")[:-1])+"/"+pdb_name+".pdb"
     # download pdb file and select appropiate 
-    downloadPDB(pdb_name, pdb_destin)
+    download_pdb(pdb_name, pdb_destin)
     clean_pdb(pdb_destin, chain_num=chain_num)
     # load trajectory scaffold and replace coordinates - assumes same order
     scaffold = mdtraj.load_pdb(pdb_destin)
@@ -509,12 +529,36 @@ def tmscore_numpy(X, Y):
     return (1 / (1 + (dist/d0)**2)).mean(axis=-1)
 
 
+def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
+              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
+    # repeat for mirrors calculations
+    pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
+    # batched mds for full parallel 
+    preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
+                                              tol=tol, verbose=verbose)
+    if not fix_mirror:
+        return preds[0], stresses[0]
+    else:
+        return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
+
+def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
+              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
+    preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
+                                         tol=tol, verbose=verbose) \
+                 for i in range( max(1,fix_mirror) )]
+
+    if not fix_mirror:
+        return preds[0]
+    else:
+        return fix_mirrors_numpy([x[0] for x in preds],
+                                 [x[1] for x in preds], N_mask, CA_mask)
 ################
 ### WRAPPERS ###
 ################
 
-def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
-              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
+@invoke_torch_or_numpy(mdscaling_torch, mdscaling_numpy)
+@set_backend_kwarg
+def MDScaling(pre_dist_mat, *, backend, **kwargs):
     """ Gets distance matrix (-ces). Outputs 3d.  
         Assumes (for now) distrogram is (N x N) and symmetric.
         For support of ditograms: see `center_distogram_torch()`
@@ -536,35 +580,12 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
         * best_3d_coords: (3 x N)
         * historic_stress: (timesteps, )
     """
-    if backend == "auto":
-        if isinstance(pre_dist_mat, torch.Tensor):
-            backend = "torch"
-        else:
-            backend = "numpy"
-    # run calcs     
-    if backend == "torch":
-        # repeat for mirrors calculations
-        pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
-        # batched mds for full parallel 
-        preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
-                                                  tol=tol, verbose=verbose)
-        if not fix_mirror:
-            return preds[0], stresses[0]
-        else:
-            return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
-    else:
-        preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
-                                         tol=tol, verbose=verbose) \
-                 for i in range( max(1,fix_mirror) )]
+    return pre_dist_mat, kwargs
 
-        if not fix_mirror:
-            return preds[0]
-        else:
-            return fix_mirrors_numpy([x[0] for x in preds],
-                                     [x[1] for x in preds], N_mask, CA_mask)
-
-
-def Kabsch(A, B, backend="auto"):
+@invoke_torch_or_numpy(kabsch_torch, kabsch_numpy)
+@set_backend_kwarg
+@cast_num_dimensions(dim_len = 2)
+def Kabsch(A, B, *, backend):
     """ Returns Kabsch-rotated matrices resulting
         from aligning A into B.
         Adapted from: https://github.com/charnley/rmsd/
@@ -573,15 +594,13 @@ def Kabsch(A, B, backend="auto"):
             * backend: one of ["numpy", "torch", "auto"] for backend choice
         * Outputs: tensor/array of shape (3 x N)
     """
-    A, B, backend = shape_and_backend(A, B, backend)
     # run calcs - pick the 0th bc an additional dim was created
-    if backend == "torch":
-        return kabsch_torch(A[0], B[0])
-    else:
-        return kabsch_numpy(A[0], B[0])
+    return A, B
 
-
-def RMSD(A, B, backend="auto"):
+@invoke_torch_or_numpy(rmsd_torch, rmsd_numpy)
+@set_backend_kwarg
+@cast_num_dimensions()
+def RMSD(A, B, *, backend):
     """ Returns RMSD score as defined here (lower is better):
         https://en.wikipedia.org/wiki/
         Root-mean-square_deviation_of_atomic_positions
@@ -590,15 +609,12 @@ def RMSD(A, B, backend="auto"):
             * backend: one of ["numpy", "torch", "auto"] for backend choice
         * Outputs: tensor/array of size (B,)
     """
-    A, B, backend = shape_and_backend(A, B, backend)
-    # run calcs
-    if backend == "torch":
-        return rmsd_torch(A, B)
-    else:
-        return rmsd_numpy(A, B)
+    return A, B
 
-
-def GDT(A,B, mode="TS", cutoffs=[1,2,4,8], weights=None, backend="auto"):
+@invoke_torch_or_numpy(gdt_torch, gdt_numpy)
+@set_backend_kwarg
+@cast_num_dimensions()
+def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
     """ Returns GDT score as defined here (highre is better):
         Supports both TS and HA
         http://predictioncenter.org/casp12/doc/help.html
@@ -609,33 +625,13 @@ def GDT(A,B, mode="TS", cutoffs=[1,2,4,8], weights=None, backend="auto"):
             * mode: one of ["numpy", "torch", "auto"] for backend
         * Outputs: tensor/array of size (B,)
     """
-    A, B, backend = shape_and_backend(A, B, backend)
     # define cutoffs for each type of gdt and weights
     cutoffs = [0.5,1,2,4] if mode in ["HA", "ha"] else [1,2,4,8]
     # calculate GDT
-    if backend == "torch":
-        return gdt_torch(A, B, cutoffs, weights=weights)
-    else:
-        return gdt_numpy(A, B, cutoffs, weights=weights)
+    return (A, B, cutoffs), {'weights': weights}
 
-
-def TMscore(A,B,backend="auto"):
-    """ Returns TMscore as defined here (higher is better):
-        >0.5 (likely) >0.6 (highly likely) same folding. 
-        = 0.2. https://en.wikipedia.org/wiki/Template_modeling_score
-        Warning! It's not exactly the code in:
-        https://zhanglab.ccmb.med.umich.edu/TM-score/TMscore.cpp
-        but will suffice for now. 
-        Inputs: 
-            * A,B are (B x 3 x N) (np.array or torch.tensor)
-            * mode: one of ["numpy", "torch", "auto"] for backend
-        Outputs: tensor/array of size (B,)
-    """
-    A, B, backend = shape_and_backend(A, B, backend)
-    # run calcs
-    if backend == "torch":
-        return tmscore_torch(A, B)
-    else:
-        return tmscore_numpy(A, B)
-
-
+@invoke_torch_or_numpy(tmscore_torch, tmscore_numpy)
+@set_backend_kwarg
+@cast_num_dimensions()
+def TMscore(A, B):
+    return A, B
