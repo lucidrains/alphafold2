@@ -78,7 +78,7 @@ def download_pdb(name, route):
         * route: str. route of the destin file. usually ".pdb" extension
         Output: route of destin file
     """
-    os.system("curl https://files.rcsb.org/download/{0}.pdb > {1}".format(name, route))
+    os.system(f"curl https://files.rcsb.org/download/{name}.pdb > {route}")
     return route
 
 def clean_pdb(name, route=None, chain_num=None):
@@ -100,7 +100,7 @@ def clean_pdb(name, route=None, chain_num=None):
             if chain_num != chain.index:
                 continue
         # select indexes of chain
-        chain_idxs = raw_prot.topology.select("chainid == {0}".format(chain.index))
+        chain_idxs = raw_prot.topology.select(f"chainid == {str(chain.index)}")
         idxs.extend( chain_idxs.tolist() )
     # sort: topology and xyz selection are ordered
     idxs = sorted(idxs)
@@ -237,7 +237,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
         cum_dist = torch.cumsum(distogram, dim=-1)
         medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=device).unsqueeze(dim=-1)
         central  = torch.searchsorted(cum_dist, medium).squeeze()
-        central  = n_bins[ torch.minimum(central, torch.tensor(DISTOGRAM_BUCKETS-1)).long() ]
+        central  = n_bins[ torch.minimum(central, torch.tensor(constants.DISTOGRAM_BUCKETS-1)).long() ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   

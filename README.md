@@ -60,6 +60,12 @@ This library will use the awesome work by <a href="http://github.com/jonathankin
 To install
 
 ```bash
+$ pip install git+https://github.com/jonathanking/sidechainnet.git
+```
+
+Or
+
+```bash
 $ git clone https://github.com/jonathanking/sidechainnet.git
 $ cd sidechainnet && pip install -e .
 ```
@@ -70,8 +76,8 @@ I have started construction of two approaches to equivariant self-attention. Bot
 
 Update - SE3 Transformers is in a good place, but Lie Transformer could use a code review, specifically how the location attention is handled
 
-- [ ] https://github.com/lucidrains/lie-transformer-pytorch
 - [x] https://github.com/lucidrains/se3-transformer-pytorch
+- [ ] https://github.com/lucidrains/lie-transformer-pytorch
 
 ## Speculation
 
