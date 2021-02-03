@@ -135,7 +135,7 @@ for _ in range(NUM_BATCHES):
         back = 3
         seq  = repeat(seq, 'b l -> b l back', back = back)
         seq  = rearrange(seq, 'b l back -> b (l back)')
-        seq_pos = repeat(torch.arange(seq.shape[-1]) % back, 'lback -> b lback', l=seq.shape[0])
+        seq_pos = repeat(torch.arange(seq.shape[-1]) % back, 'lback -> b lback', b=seq.shape[0])
         mask = repeat(mask, 'b l -> b l back', back = back)
         mask = rearrange(mask, 'b l back -> b (l back)')
         if FEATURES == "msa":
@@ -166,7 +166,7 @@ for _ in range(NUM_BATCHES):
         
         ## refine
         # sample tokens for now based on indices
-        atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=mask.shape[0]) % NUM_COORDS_PER_RES
+        atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=seq.shape[0]) % NUM_COORDS_PER_RES
         refined = refiner(atom_tokens[cloud_mask], sidechain_3d[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
