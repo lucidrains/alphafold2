@@ -2,11 +2,14 @@
 import os
 import numpy as np 
 import torch
+from einops import rearrange, repeat
 # bio
 import mdtraj
 try:
     from sidechainnet.sequence.utils import VOCAB
+    from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
     from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, SC_BUILD_INFO
+    from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 except:
     NUM_COORDS_PER_RES = 14
 # own
@@ -110,8 +113,7 @@ def custom2pdb(coords, proteinnet_id, route):
     return pdb_destin, route
 
 
-# distance utils (distogram to dist mat + masking)
-
+# sidechainnet utils
 
 def scn_cloud_mask(scn_seq, bool=True):
     """ Gets the boolean mask atom positions (not all aas have same atoms). 
@@ -128,21 +130,58 @@ def scn_cloud_mask(scn_seq, bool=True):
             mask[n, i, :n_atoms] = 1
     return mask.bool()
 
-def scn_backbone_mask(scn_seq, bool=True):
+def scn_backbone_mask(scn_seq, bool=True, l_aa=NUM_COORDS_PER_RES):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
         * scn_seq: sequence as provided by Sidechainnet package
         * bool: whether to return as array of idxs or boolean values
         Outputs: (N_mask, CA_mask)
     """
-    lengths = np.arange(scn_seq.shape[-1]*NUM_COORDS_PER_RES)
+    lengths = np.arange(scn_seq.shape[-1]*l_aa)
     # N is the first atom in every AA. CA is the 2nd.
-    N_mask  = lengths%NUM_COORDS_PER_RES == 0
-    CA_mask = lengths%NUM_COORDS_PER_RES == 1
+    N_mask  = lengths%l_aa == 0
+    CA_mask = lengths%l_aa == 1
     if boolean:
         return N_mask, CA_mask
     else:
         return lengths[N_mask], lengths[CA_mask]
+
+def sidechain_3d(seq, backbone, n_atoms=NUM_COORDS_PER_RES, 
+                 padding=GLOBAL_PAD_CHAR, force=False):
+    """ Gets a backbone of the protein, returns the whole coordinates
+        with sidechains (same format as sidechainnet). Keeps differentiability.
+        Inputs: 
+        * seq: (L,) tensor of ints. sequence tokens.
+        * backbone: (batch, L*3, 3): assume batch=1 (could be extended later).
+                    Coords for (N-term, C-alpha, C-term) of every aa.
+        * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
+        * padding: int. padding token. same as in sidechainnet: 0
+        Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
+    """
+    bacth, length = list(backbone.shape[:2])
+    new_coords = torch.ones(batch, length//3, NUM_COORDS_PER_RES, 3) * padding
+    new_coords[:, :, :3] = rearrange(backbone, 'b (l back) d -> b l back d', back=3)
+    # build sidechain for every aa
+    for i,token in enumerate(seq):
+        # position C-beta
+        # 
+        # # get location of (=O) spanding from C-term
+        #
+        # # get tetrahedral conformation of C-alpha, find closest to (=O), exploit D-aa
+        #
+        # iterate over aa atoms and place them accordingly
+        for j, (bond_len, angle, torsion, atom_names) in enumerate(
+            _get_residue_build_iter(token, SC_BUILD_INFO)):
+            pass 
+            # extend from previous atom
+            #
+    if force:
+        return new_coords
+    else:
+        raise NotImplementedError("Function not implemented yet")
+
+
+# distance utils (distogram to dist mat + masking)
 
 def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center="median", wide="std"):
     """ Returns the central estimate of a distogram. Median for now.
@@ -217,7 +256,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         ratio = weights * (pre_dist_mat / dist_mat)
         B = ratio * (-1)
         B[:, np.arange(N), np.arange(N)] += ratio.sum(dim=-1)
-        # update - double transpose. TODO: consider fix
+        # update
         coords = (1. / N * torch.matmul(B, best_3d_coords))
         dis = torch.norm(coords, dim=(-1, -2))
         if verbose >= 2:
@@ -277,7 +316,6 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
 
     return best_3d_coords, np.array(his)
 
-# TODO: test
 def get_dihedral_torch(c1, c2, c3, c4, c5):
     """ Returns the dihedral angle in radians.
         Will use atan2 formula from: 
@@ -327,7 +365,7 @@ def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, verbose=0):
     # debugging/testing if arg passed
     if verbose:
         print("Negative phis:", phis_count, "selected", idx)
-    return preds[idx], stresses[idx]
+    return preds[idx].unsqueeze(0), stresses[idx]
 
 def fix_mirrors_numpy(preds, stresses, N_mask, CA_mask, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
@@ -502,7 +540,7 @@ def MDScaling(pre_dist_mat, weights=None, iters=10, tol=1e-5, backend="auto",
     # run calcs     
     if backend == "torch":
         # repeat for mirrors calculations
-        pre_dist_mat = torch.repeat_interleave(pre_dist_mat, max(1,fix_mirror), dim=0)
+        pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
         # batched mds for full parallel 
         preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                                   tol=tol, verbose=verbose)

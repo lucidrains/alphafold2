@@ -6,6 +6,7 @@ from einops import rearrange
 # data
 import sidechainnet as scn
 from sidechainnet.sequence.utils import VOCAB
+from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 # models
 from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 from utils import *
@@ -76,6 +77,17 @@ model = Alphafold2(
     dim_head = 64
 ).to(DEVICE)
 
+refiner = SE3Transformer(
+    num_tokens = 10, # 10 unique atoms ([N-term, C-alpha, C-term, C-beta, =O, -O], C, O, N, S )
+    dim = 64,
+    depth = 2,
+    input_degrees = 1,
+    num_degrees = 2,
+    output_degrees = 2,
+    reduce_dim_out = True
+)
+
+
 
 # optimizer 
 dispersion_weight = 0.1
@@ -92,8 +104,14 @@ for _ in range(NUM_BATCHES):
         # prepare data and mask labels
 
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
-        # mask the atoms for each residue
-        cloud_mask = scn_cloud_mask(seq, bool=True)
+        # coords = rearrange(coords, 'b (l c) d -> b l c d', l = l) # no need to rearrange for now
+        # mask the atoms and backbone positions for each residue
+        N_mask, CA_mask = scn_backbone_mask(seq, bool = True, l_aa = 3) # NUM_COORDS_PER_RES
+        cloud_mask = scn_cloud_mask(seq, bool = False)
+        mask = mask*cloud_mask
+        # flatten last dims for point cloud masking
+        mask = rearrange(mask, 'b l c -> b (l c)', l = l).bool()
+        cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l).bool()
 
 
         # sequence embedding (msa / esm / attn / or nothing)
@@ -104,7 +122,7 @@ for _ in range(NUM_BATCHES):
             data = [(0, str_seq)]
             batch_labels, batch_strs, batch_tokens = batch_converter(data)
             with torch.no_grad():
-                results = model(batch_tokens, repr_layers=[33], return_contacts=False)
+                results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
             embedds = results["representations"][33].to(DEVICE)
         # get msa here
         elif FEATURES == "msa":
@@ -117,7 +135,6 @@ for _ in range(NUM_BATCHES):
         distogram = model(seq, msa = msa, embedds = embedds, mask = mask)
 
         # convert to 3d
-        N_mask, CA_mask = scn_backbone_mask(seq)
         distances, weights = center_distogram_torch(distogram)
 
 
@@ -130,15 +147,16 @@ for _ in range(NUM_BATCHES):
         ) # (3, N)
         coords_3d = rearrange(coords_3d, 'd n -> () n d')
 
-        # # TODO: build whole sidechain
-        # sidechain_3d = build_sidechain(coords_3d)
-        cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l)
-
-        # refine
-        # refined = refiner(coords_3d[cloud_mask]) # (1, N, 3)
+        ## TODO: build whole sidechain
+        sidechain_3d = build_sidechain(seq, coords_3d) # (batch, l, c, d)
+        sidechain_3d = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
+        
+        ## refine
+        atom_tokens = torch.ones(*mask.shape) # sample tokens for now
+        refined = refiner(atom_tokens, sidechain_3d[cloud_mask], mask=mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
-        coords_aligned = Kabsch(refined, scaffold[cloud_mask])
+        coords_aligned = Kabsch(refined, coords[cloud_mask])
 
         # loss
         loss = torch.sqrt(criterion(coords_aligned[mask], coords[mask])) + \
