@@ -3,12 +3,15 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from einops import rearrange
+
 # data
 import sidechainnet as scn
 from sidechainnet.sequence.utils import VOCAB
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
+
 # models
 from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
+from se3_transformer_pytorch import SE3Transformer
 from utils import *
 
 
