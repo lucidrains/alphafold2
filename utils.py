@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from functools import wraps
 from einops import rearrange, repeat
+
 # bio
 import mdtraj
 try:
@@ -13,6 +14,7 @@ try:
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 except:
     NUM_COORDS_PER_RES = 14
+
 # own
 from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
 
@@ -585,7 +587,7 @@ def MDScaling(pre_dist_mat, *, backend, **kwargs):
 @invoke_torch_or_numpy(kabsch_torch, kabsch_numpy)
 @set_backend_kwarg
 @cast_num_dimensions(dim_len = 2)
-def Kabsch(A, B, *, backend):
+def Kabsch(A, B, *, backend='auto'):
     """ Returns Kabsch-rotated matrices resulting
         from aligning A into B.
         Adapted from: https://github.com/charnley/rmsd/
@@ -600,7 +602,7 @@ def Kabsch(A, B, *, backend):
 @invoke_torch_or_numpy(rmsd_torch, rmsd_numpy)
 @set_backend_kwarg
 @cast_num_dimensions()
-def RMSD(A, B, *, backend):
+def RMSD(A, B, *, backend='auto'):
     """ Returns RMSD score as defined here (lower is better):
         https://en.wikipedia.org/wiki/
         Root-mean-square_deviation_of_atomic_positions
@@ -614,7 +616,7 @@ def RMSD(A, B, *, backend):
 @invoke_torch_or_numpy(gdt_torch, gdt_numpy)
 @set_backend_kwarg
 @cast_num_dimensions()
-def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
+def GDT(A, B, *, backend='auto', mode="TS", cutoffs=[1,2,4,8], weights=None):
     """ Returns GDT score as defined here (highre is better):
         Supports both TS and HA
         http://predictioncenter.org/casp12/doc/help.html
@@ -633,5 +635,5 @@ def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
 @invoke_torch_or_numpy(tmscore_torch, tmscore_numpy)
 @set_backend_kwarg
 @cast_num_dimensions()
-def TMscore(A, B):
+def TMscore(A, B, backend='auto'):
     return A, B
