@@ -21,6 +21,12 @@ setup(
     'mdtraj>=1.8',
     'se3-transformer-pytorch'
   ],
+  setup_requires=[
+    'pytest-runner',
+  ],
+  tests_require=[
+    'pytest'
+  ],
   classifiers=[
     'Development Status :: 4 - Beta',
     'Intended Audience :: Developers',

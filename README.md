@@ -47,6 +47,12 @@ coords_3d = MDScaling(distances,
 ) 
 ```
 
+## Testing
+
+```bash
+$ python setup.py test
+```
+
 ## Data
 
 This library will use the awesome work by <a href="http://github.com/jonathanking">Jonathan King</a> at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>.
@@ -80,6 +86,8 @@ https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-on
 Developments from competing labs
 
 https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
+
+# External packages
 
 * **Final step** - <a href="https://graylab.jhu.edu/PyRosetta.documentation/pyrosetta.rosetta.protocols.relax.html#pyrosetta.rosetta.protocols.relax.FastRelax">Fast Relax</a> - **Installation Instructions**:
     * Download the pyrosetta wheel from: http://www.pyrosetta.org/dow (select appropiate version) - beware the file is heavy (approx 1.2 Gb)
