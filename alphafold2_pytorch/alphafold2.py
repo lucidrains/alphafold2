@@ -190,7 +190,7 @@ class Alphafold2(nn.Module):
     def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
         n, device = seq.shape[1], seq.device
 
-        # unpack (AA_cod, atom_pos)
+        # unpack (AA_code, atom_pos)
         if isinstance(seq, list):
             seq, seq_pos = seq
         # embed main sequence

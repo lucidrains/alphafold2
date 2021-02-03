@@ -124,7 +124,7 @@ def custom2pdb(coords, proteinnet_id, route):
         coords = coords.T
     coords = np.newaxis(coords, axis=0)
     # get pdb id and chain num
-    pdb_name, china_num = proteinnet_id.split("#")[-1].split("_")[:-1]
+    pdb_name, chain_num = proteinnet_id.split("#")[-1].split("_")[:-1]
     pdb_destin = "/".join(route.split("/")[:-1])+"/"+pdb_name+".pdb"
     # download pdb file and select appropiate 
     download_pdb(pdb_name, pdb_destin)
@@ -566,7 +566,7 @@ def MDScaling(pre_dist_mat, **kwargs):
         Assumes (for now) distrogram is (N x N) and symmetric.
         For support of ditograms: see `center_distogram_torch()`
         Inputs:
-        * distogram: (1, N, N) distance matrix.
+        * pre_dist_mat: (1, N, N) distance matrix.
         * weights: optional. (N x N) pairwise relative weights .
         * iters: number of iterations to run the algorithm on
         * tol: relative tolerance at which to stop the algorithm if no better
@@ -637,4 +637,15 @@ def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
 @set_backend_kwarg
 @invoke_torch_or_numpy(tmscore_torch, tmscore_numpy)
 def TMscore(A, B):
+    """ Returns TMscore as defined here (higher is better):
+        >0.5 (likely) >0.6 (highly likely) same folding. 
+        = 0.2. https://en.wikipedia.org/wiki/Template_modeling_score
+        Warning! It's not exactly the code in:
+        https://zhanglab.ccmb.med.umich.edu/TM-score/TMscore.cpp
+        but will suffice for now. 
+        Inputs: 
+            * A,B are (B x 3 x N) (np.array or torch.tensor)
+            * mode: one of ["numpy", "torch", "auto"] for backend
+        Outputs: tensor/array of size (B,)
+    """
     return A, B
