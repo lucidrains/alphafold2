@@ -1,6 +1,11 @@
 import torch
 from alphafold2_pytorch.utils import *
 
+def test_center_distogram_median():
+    distogram = torch.randn(1, 128, 128, 37)
+    distances, weights = center_distogram_torch(distogram, center = 'median')
+    assert True
+
 def test_mds():
     distogram = torch.randn(1, 128, 128, 37)
 
