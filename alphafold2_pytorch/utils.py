@@ -17,11 +17,12 @@ except:
     GLOBAL_PAD_CHAR = 0
 
 # own
-from alphafold2_pytorch.alphafold2 import DISTOGRAM_BUCKETS
+
+import alphafold2_pytorch.constants as constants
 
 # constants: same as in alphafold2.py
 
-DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS)
+DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = constants.DISTOGRAM_BUCKETS)
 
 # decorators
 
@@ -31,7 +32,6 @@ def set_backend_kwarg(fn):
         if backend == 'auto':
             backend = 'torch' if isinstance(args[0], torch.Tensor) else 'numpy'
         kwargs.update(backend = backend)
-        print('settinb backend kwargs', backend, kwargs)
         return fn(*args, **kwargs)
     return inner
 
