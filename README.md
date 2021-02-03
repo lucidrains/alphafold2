@@ -16,8 +16,8 @@ $ pip install alphafold2-pytorch
 
 ```python
 import torch
-from utils import *
 from alphafold2_pytorch import Alphafold2
+from alphafold2_pytorch.utils import MDScaling, center_distogram_torch
 
 model = Alphafold2(
     dim = 256,
@@ -38,13 +38,13 @@ distogram = model(
     msa_mask = msa_mask
 ) # (1, 128, 128, 37)
 
-distances, _, weights = center_distogram_torch(distogram)
+distances, weights = center_distogram_torch(distogram)
 
 coords_3d, _ = MDScaling(distances, 
     weights = weights,
     iters = 200, 
     fix_mirror = 0
-) 
+)
 ```
 
 ## Testing
