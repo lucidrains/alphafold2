@@ -12,7 +12,7 @@ from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 # models
 from alphafold2_pytorch import Alphafold2, DISTOGRAM_BUCKETS
 from se3_transformer_pytorch import SE3Transformer
-from utils import *
+from alphafold2_pytorch.utils import *
 
 
 # constants
