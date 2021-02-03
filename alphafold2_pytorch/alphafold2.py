@@ -145,6 +145,7 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
+        pos_token = 3,
         num_tokens = NUM_AMINO_ACIDS,
         num_embedds = NUM_EMBEDDS_TR,
         attn_dropout = 0.,
@@ -189,8 +190,10 @@ class Alphafold2(nn.Module):
     def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
         n, device = seq.shape[1], seq.device
 
+        # unpack (AA_cod, atom_pos)
+        if isinstance(seq, list):
+            seq, seq_pos = seq
         # embed main sequence
-
         x = self.token_emb(seq)
         x += self.pos_emb(torch.arange(n, device = device))[None, ...]
         x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds

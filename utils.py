@@ -120,9 +120,13 @@ def scn_cloud_mask(scn_seq, bool=True):
         Inputs: 
         * scn_seq: (batch, length) sequence as provided by Sidechainnet package
         * bool: whether to return as array of idxs or boolean values
-        Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask
+        * mask: (batch, length). current mask to build a custom chain_mask 
+        Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask 
     """
+    # scaffolds 
     mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=snc_seq.device)
+    chain_mask = []
+    # fill 
     for n in range(len(masks)):
         for i,aa in enumerate(scn_seq.cpu().numpy()):
             # get num of atom positions - backbone is 4: ...N-C-C(=O)...
@@ -165,7 +169,7 @@ def sidechain_3d(seq, backbone, n_atoms=NUM_COORDS_PER_RES,
     for i,token in enumerate(seq):
         # position C-beta
         # 
-        # # get location of (=O) spanding from C-term
+        # # get location of (=O) spanding from previous C-term
         #
         # # get tetrahedral conformation of C-alpha, find closest to (=O), exploit D-aa
         #
