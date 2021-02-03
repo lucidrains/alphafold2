@@ -138,7 +138,7 @@ for _ in range(NUM_BATCHES):
         distances, weights = center_distogram_torch(distogram)
 
 
-        coords_3d = MDScaling(distances, 
+        coords_3d, stress= MDScaling(distances, 
             weights,
             iters = 200, 
             fix_mirror = 5, 
