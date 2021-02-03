@@ -167,8 +167,8 @@ def scn_backbone_mask(scn_seq, bool=True, l_aa=NUM_COORDS_PER_RES):
     CA_mask = lengths%l_aa == 1
     if boolean:
         return N_mask, CA_mask
-    else:
-        return lengths[N_mask], lengths[CA_mask]
+
+    return lengths[N_mask], lengths[CA_mask]
 
 def sidechain_3d(seq, backbone, n_atoms=NUM_COORDS_PER_RES, 
                  padding=GLOBAL_PAD_CHAR, force=False):
@@ -201,8 +201,8 @@ def sidechain_3d(seq, backbone, n_atoms=NUM_COORDS_PER_RES,
             #
     if force:
         return new_coords
-    else:
-        raise NotImplementedError("Function not implemented yet")
+
+    raise NotImplementedError("Function not implemented yet")
 
 
 # distance utils (distogram to dist mat + masking)
@@ -286,15 +286,15 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
-        if (best_stress - stress / dis).mean() > tol:
-            best_3d_coords = coords
-            best_stress = (stress / dis)
-            his.append(best_stress)
-        else:
+        if (best_stress - stress / dis).mean() <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
                                                                    stress))
             break
+
+        best_3d_coords = coords
+        best_stress = (stress / dis)
+        his.append(best_stress)
 
     return torch.transpose(best_3d_coords, -1,-2), torch.cat(his)
 
@@ -328,15 +328,15 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
-        if(best_stress - stress / dis) > tol:
-            best_3d_coords = coords
-            best_stress = stress / dis
-            his.append(best_stress)
-        else:
+        if (best_stress - stress / dis) <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
                                                                    stress))
             break
+
+        best_3d_coords = coords
+        best_stress = stress / dis
+        his.append(best_stress)
 
     return best_3d_coords, np.array(his)
 
@@ -538,8 +538,8 @@ def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
                                               tol=tol, verbose=verbose)
     if not fix_mirror:
         return preds[0], stresses[0]
-    else:
-        return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
+
+    return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
 
 def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
@@ -549,9 +549,9 @@ def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
 
     if not fix_mirror:
         return preds[0]
-    else:
-        return fix_mirrors_numpy([x[0] for x in preds],
-                                 [x[1] for x in preds], N_mask, CA_mask)
+
+    return fix_mirrors_numpy([x[0] for x in preds],
+                             [x[1] for x in preds], N_mask, CA_mask)
 ################
 ### WRAPPERS ###
 ################
