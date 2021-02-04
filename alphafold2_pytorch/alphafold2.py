@@ -27,12 +27,24 @@ def default(val, d):
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
-        self.norm = nn.LayerNorm(dim)
         self.fn = fn
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, x, *args, **kwargs):
         x = self.norm(x)
         return self.fn(x, *args, **kwargs)
+
+class PreNormCross(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.fn = fn
+        self.norm = nn.LayerNorm(dim)
+        self.norm_context = nn.LayerNorm(dim)
+
+    def forward(self, x, context, *args, **kwargs):
+        x = self.norm(x)
+        context = self.norm(context)
+        return self.fn(x, context, *args, **kwargs)
 
 class GEGLU(nn.Module):
     def forward(self, x):
@@ -172,7 +184,8 @@ class Alphafold2(nn.Module):
 
         # main trunk modules
 
-        wrapper = partial(PreNorm, dim)
+        prenorm = partial(PreNorm, dim)
+        prenorm_cross = partial(PreNormCross, dim)
 
         layers = nn.ModuleList([])
         for _ in range(depth):
@@ -180,19 +193,19 @@ class Alphafold2(nn.Module):
             # self attention, for both main sequence and msa
 
             layers.append(nn.ModuleList([
-                wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
-                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
             # cross attention, for main sequence -> msa and then msa -> sequence
 
             layers.append(nn.ModuleList([
-                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
-                wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm_cross(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm_cross(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
         if not reversible:
