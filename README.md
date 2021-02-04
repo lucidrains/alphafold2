@@ -141,11 +141,11 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
 
 ```bibtex
 @misc{gomez2017reversible,
-      title     = {The Reversible Residual Network: Backpropagation Without Storing Activations}, 
-      author    = {Aidan N. Gomez and Mengye Ren and Raquel Urtasun and Roger B. Grosse},
-      year      = {2017},
-      eprint    = {1707.04585},
-      archivePrefix = {arXiv},
-      primaryClass = {cs.CV}
+    title     = {The Reversible Residual Network: Backpropagation Without Storing Activations}, 
+    author    = {Aidan N. Gomez and Mengye Ren and Raquel Urtasun and Roger B. Grosse},
+    year      = {2017},
+    eprint    = {1707.04585},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CV}
 }
 ```
