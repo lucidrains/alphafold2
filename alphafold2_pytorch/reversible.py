@@ -74,8 +74,8 @@ class ReversibleSelfAttnBlock(nn.Module):
         self.k = Deterministic(k)        
 
     def forward(self, x, m, f_args = {}, j_args = {}, _reverse = True):
-        x1, x2 = torch.chunk(x, 2, dim = -1)
-        m1, m2 = torch.chunk(m, 2, dim = -1)
+        x1, x2 = torch.chunk(x, 2, dim = 2)
+        m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
 
         context = torch.no_grad if _reverse else null_context
@@ -173,8 +173,8 @@ class ReversibleCrossAttnBlock(nn.Module):
         self.k = Deterministic(k)
 
     def forward(self, x, m, f_args = {}, j_args = {}, _reverse = True):
-        x1, x2 = torch.chunk(x, 2, dim = -1)
-        m1, m2 = torch.chunk(m, 2, dim = -1)
+        x1, x2 = torch.chunk(x, 2, dim = 2)
+        m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
 
         context = torch.no_grad if _reverse else null_context
@@ -183,7 +183,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with context():
             y1 = x1 + self.f(x2, m2, record_rng = record_rng, **f_args)
             y2 = x2 + self.g(y1, record_rng = record_rng, **j_args)
-            n1 = m1 + self.j(m2, y1, record_rng = record_rng, **f_args)
+            n1 = m1 + self.j(m2, y2, record_rng = record_rng, **f_args)
             n2 = m2 + self.k(n1, record_rng = record_rng, **j_args)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
@@ -218,7 +218,7 @@ class ReversibleCrossAttnBlock(nn.Module):
             m2.requires_grad = True
             y2.requires_grad = True
             fm2 = self.j(m2, y2, set_rng=True, **j_args)
-            torch.autograd.backward(fm2, dm1, retain_graph=True)
+            torch.autograd.backward(fm2, dm1)
 
         with torch.no_grad():
             m1 = n1 - fm2
@@ -227,6 +227,7 @@ class ReversibleCrossAttnBlock(nn.Module):
             dm2 = dn2 + m2.grad
             dx2 = dy2 + y2.grad
             del dn2
+            del dy2
             m2.grad = None
             y2.grad = None
 
@@ -247,15 +248,14 @@ class ReversibleCrossAttnBlock(nn.Module):
             x2.requires_grad = True
             m2.requires_grad = True
             fx2 = self.f(x2, m2, set_rng = True, **f_args)
-            torch.autograd.backward(fx2, dx1, retain_graph=True)
+            torch.autograd.backward(fx2, dx1)
 
         with torch.no_grad():
             x1 = y1 - fx2
             del y1, fx2
 
-            dx2 = dy2 + x2.grad
+            dx2 = dx2 + x2.grad
             dm2 = dm2 + m2.grad
-            del dy2
             x2.grad = None
             m2.grad = None
 
