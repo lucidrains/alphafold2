@@ -10,6 +10,8 @@ from einops import rearrange, repeat
 import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.reversible import ReversibleSequence, SequentialSequence
 
+from se3_transformer_pytorch import SE3Transformer
+
 # helpers
 
 def exists(val):
@@ -242,6 +244,12 @@ class Alphafold2(nn.Module):
         # trunk
 
         x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask)
+
+        # structural refinement
+
+        # TODO - use SE3Transformer here, as details emerge about the iterative refinement, fill-in here
+
+        # final out, do alphafold1's distogram for now
 
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
