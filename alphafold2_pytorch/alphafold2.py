@@ -4,9 +4,11 @@ from inspect import isfunction
 from functools import partial
 import torch.nn.functional as F
 
+from math import sqrt
 from einops import rearrange, repeat
 
 import alphafold2_pytorch.constants as constants
+from alphafold2_pytorch.reversible import ReversibleSequence
 
 # helpers
 
@@ -106,7 +108,12 @@ class AxialAttention(nn.Module):
         self.attn_height = Attention(**kwargs)
 
     def forward(self, x, context = None, mask = None, context_mask = None):
-        b, h, w, d = x.shape
+        b, n, d = x.shape
+        w = h = int(sqrt(n))
+
+        x = x.reshape(b, h, w, d)
+        mask = mask.reshape(b, h, w)
+
         w_mask = h_mask = w_context = h_context = w_context_mask = h_context_mask = None
 
         if exists(mask):
@@ -127,7 +134,8 @@ class AxialAttention(nn.Module):
         h_out = self.attn_height(h_x, mask = h_mask, context = h_context, context_mask = h_context_mask)
         h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
-        return w_out + h_out
+        out = w_out + h_out
+        return rearrange(out, 'b h w d -> b (h w) d')
 
 # main class
 
@@ -186,13 +194,19 @@ class Alphafold2(nn.Module):
         n, device = seq.shape[1], seq.device
 
         # unpack (AA_code, atom_pos)
-        if isinstance(seq, list):
+
+        if isinstance(seq, (list, tuple)):
             seq, seq_pos = seq
+
         # embed main sequence
+
         x = self.token_emb(seq)
         x += self.pos_emb(torch.arange(n, device = device))[None, ...]
         x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
         x_mask = mask[:, :, None] * mask[:, None, :]
+
+        x = rearrange(x, 'b i j d -> b (i j) d')
+        x_mask = rearrange(x_mask, 'b i j -> b (i j)')
 
         # embed multiple sequence alignment
 
@@ -207,7 +221,6 @@ class Alphafold2(nn.Module):
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-            # pairwise mat - maybe repeating stuff? 
             m = m[:, :, None, :] + m[:, None, :, :]
             m = rearrange(m, 'b m n d -> b (m n) d')
 
@@ -227,24 +240,19 @@ class Alphafold2(nn.Module):
 
                 # cross attention
 
-                x = rearrange(x, 'b i j d -> b (i j) d')
-                x_mask_flat = rearrange(x_mask, 'b i j -> b (i j)')
-
                 m = msa_cross_attn(
                     m,
                     mask = msa_mask,
                     context = x,
-                    context_mask = x_mask_flat
+                    context_mask = x_mask
                 ) + m
 
                 x = cross_attn(
                     x,
-                    mask = x_mask_flat,
+                    mask = x_mask,
                     context = m,
                     context_mask = msa_mask
                 ) + x
-
-                x = rearrange(x, 'b (i j) d -> b i j d', i = n)
 
             # feedforwards
 
@@ -255,5 +263,6 @@ class Alphafold2(nn.Module):
 
         x = self.norm(x)
 
+        x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
         return self.to_distogram_logits(x)
