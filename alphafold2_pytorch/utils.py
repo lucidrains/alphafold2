@@ -35,10 +35,10 @@ def set_backend_kwarg(fn):
         return fn(*args, **kwargs)
     return inner
 
-def expand_dims_to(t, len = 3):
-    if len == 0:
+def expand_dims_to(t, length = 3):
+    if length == 0:
         return t
-    return t.reshape(*((1,) * len), *t.shape) # will work with both torch and numpy
+    return t.reshape(*((1,) * length), *t.shape) # will work with both torch and numpy
 
 def expand_arg_dims(dim_len = 3):
     """ pack here for reuse. 
@@ -48,9 +48,9 @@ def expand_arg_dims(dim_len = 3):
         @wraps(fn)
         def inner(x, y, **kwargs):
             assert len(x.shape) == len(y.shape), "Shapes of A and B must match."
-            remaining_len = len(x.shape) - dim_len
-            x = expand_dims_to(x, remaining_len)
-            y = expand_dims_to(y, remaining_len)
+            remaining_len = dim_len - len(x.shape)
+            x = expand_dims_to(x, length = remaining_len)
+            y = expand_dims_to(y, length = remaining_len)
             return fn(x, y, **kwargs)
         return inner
     return outer
@@ -177,35 +177,36 @@ def scn_backbone_mask(scn_seq, bool=True, l_aa=NUM_COORDS_PER_RES):
 
     return lengths[N_mask], lengths[CA_mask]
 
-def sidechain_3d(seq, backbone, n_atoms=NUM_COORDS_PER_RES, 
+def sidechain_3d(seqs, backbones, n_atoms=NUM_COORDS_PER_RES, 
                  padding=GLOBAL_PAD_CHAR, force=False):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
-        * seq: (L,) tensor of ints. sequence tokens.
-        * backbone: (batch, L*3, 3): assume batch=1 (could be extended later).
+        * seqs: (bacth, L,) tensor of ints. sequence tokens.
+        * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
                     Coords for (N-term, C-alpha, C-term) of every aa.
         * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
         * padding: int. padding token. same as in sidechainnet: 0
         Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
     """
-    batch, length = list(backbone.shape[:2])
-    new_coords = torch.ones(batch, length//3, NUM_COORDS_PER_RES, 3) * padding
-    new_coords[:, :, :3] = rearrange(backbone, 'b (l back) d -> b l back d', back=3)
-    # build sidechain for every aa
-    for i,token in enumerate(seq):
-        # position C-beta
-        # 
-        # # get location of (=O) spanding from previous C-term
-        #
-        # # get tetrahedral conformation of C-alpha, find closest to (=O), exploit D-aa
-        #
-        # iterate over aa atoms and place them accordingly
-        for j, (bond_len, angle, torsion, atom_names) in enumerate(
-            _get_residue_build_iter(token, SC_BUILD_INFO)):
-            pass 
-            # extend from previous atom
+    batch, length = list(seqs.shape[:2])
+    new_coords = torch.ones(batch, length, NUM_COORDS_PER_RES, 3) * padding
+    new_coords[:, :, :3] = rearrange(backbone, 'b (l back) d -> b l back d', l=length)
+    # all proteins
+    for s in range(len(seqs)):
+        # build sidechain for every aa
+        for i,token in enumerate(seq):
+            # position C-beta phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
+            phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
+            psi = get_dihedral_torch(*backbone[s, i*3 + 0 : i*3 + 4] )if i < length-1 else None
+            # # get tetrahedral conformation of C-alpha, exploit D-aa, find Cbeta
             #
+            # iterate over aa atoms and place them accordingly
+            for j, (bond_len, angle, torsion, atom_names) in enumerate(
+                _get_residue_build_iter(token, SC_BUILD_INFO)):
+                pass 
+                # extend from previous atom
+                #
     if force:
         return new_coords
 
@@ -235,9 +236,10 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # calculate measures of centrality and dispersion - 
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
-        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], device=device).unsqueeze(dim=-1)
+        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], 1, device=device)
         central  = torch.searchsorted(cum_dist, medium).squeeze()
-        central  = n_bins[ torch.minimum(central, torch.tensor( len(n_bins)-1 )).long() ].unsqueeze(dim=0)
+        central  = n_bins[ torch.minimum(central, 
+                                         torch.tensor( len(n_bins)-1 ).long().to(device) ) ].unsqueeze(dim=0)
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   
@@ -271,8 +273,8 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
 
-    # batched MDS
-    pre_dist_mat = expand_dims_to(pre_dist_mat, len = (len(pre_dist_mat) - 3))
+    # enusre batched MDS
+    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
 
     # start
     batch, N, _ = pre_dist_mat.shape
@@ -284,11 +286,11 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2)
-        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) / 2
+        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-7
         ratio = weights * (pre_dist_mat / dist_mat)
-        B = ratio * (-1)
+        B = -ratio
         B[:, np.arange(N), np.arange(N)] += ratio.sum(dim=-1)
         # update
         coords = (1. / N * torch.matmul(B, best_3d_coords))
@@ -299,7 +301,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         if (best_stress - stress / dis).mean() <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
-                                                                   stress))
+                                                                   stress / dis))
             break
 
         best_3d_coords = coords
@@ -326,11 +328,11 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     for i in range(iters):
         # compute distance matrix of coords and stress
         dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=0)
-        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() / 2
+        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-7
         ratio = pre_dist_mat / dist_mat
-        B = ratio * (-1)
+        B = -ratio 
         B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
         # update - double transpose. TODO: consider fix
         coords = (1. / N * np.dot(best_3d_coords, B))
@@ -341,7 +343,7 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         if (best_stress - stress / dis) <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
-                                                                   stress))
+                                                                   stress / dis))
             break
 
         best_3d_coords = coords
@@ -350,48 +352,58 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
 
     return best_3d_coords, np.array(his)
 
-def get_dihedral_torch(c1, c2, c3, c4, c5):
+def get_dihedral_torch(c1, c2, c3, c4):
     """ Returns the dihedral angle in radians.
         Will use atan2 formula from: 
         https://en.wikipedia.org/wiki/Dihedral_angle#In_polymer_physics
     """
-
     u1 = c2 - c1
     u2 = c3 - c2
     u3 = c4 - c3
-    u4 = c5 - c4
 
-    return torch.atan2( torch.dot( torch.norm(u2) * u1, torch.cross(u3,u4) ),  
-                        torch.dot( torch.cross(u1,u2), torch.cross(u3, u4) ) ) 
+    return torch.atan2( torch.dot( torch.norm(u2) * u1, torch.cross(u2,u3) ),  
+                        torch.dot( torch.cross(u1,u2), torch.cross(u2, u3) ) ) 
 
-def get_dihedral_numpy(c1, c2, c3, c4, c5):
+
+def get_dihedral_numpy(c1, c2, c3, c4):
     """ Returns the dihedral angle in radians.
         Will use atan2 formula from: 
         https://en.wikipedia.org/wiki/Dihedral_angle#In_polymer_physics
     """
-
     u1 = c2 - c1
     u2 = c3 - c2
     u3 = c4 - c3
-    u4 = c5 - c4
 
-    return np.arctan2( np.dot( np.linalg.norm(u2) * u1, np.cross(u3,u4) ),  
-                       np.dot( np.cross(u1,u2), np.cross(u3, u4) ) ) 
+    return np.arctan2( np.dot( np.linalg.norm(u2) * u1, np.cross(u2,u3) ),  
+                       np.dot( np.cross(u1,u2), np.cross(u2, u3) ) ) 
 
-def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, verbose=0):
+def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
-        Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
+        Angle Phi between planes: (Cterm{-1}, N, Ca{0}) and (N{0}, Ca{+1}, Cterm{+1})
+        * preds: (n_mirrors, 3, N)
+        * stresses: (n_mirrors, steps) historic stresses
+        * N_mask: (N, ) boolean mask for N-term positions
+        * CA_mask: (N, ) boolean mask for C-alpha positions
+        * C_mask: (N, ) or None. boolean mask for C-alpha positions or
+                    automatically calculate from N_mask and CA_mask if None.
+        * verbose: bool. verbosity level
     """ 
-    preds_ = preds.detach()
-    ns = torch.transpose(preds_, -1, -2)[:, N_mask][:, 1:]
-    cs = torch.transpose(preds_, -1, -2)[:, CA_mask]
+    # detach gradients for angle calculation - mirror selection
+    preds_ = torch.transpose(preds.detach(), -1 , -2).cpu()
+    n_terms  = preds_[:, N_mask]
+    c_alphas = preds_[:, CA_mask]
+    # select c_term auto if not passed
+    if C_mask is not None: 
+        c_terms = preds_[:, C_mask]
+    else:
+        c_terms  = preds_[:, (torch.ones(*N_mask.shape)-N_mask-CA_mask).bool() ]
     # compute phis and count lower than 0s
     phis_count = []
-    for i in range(cs.shape[0]):
+    for i in range(preds.shape[0]):
         # calculate phi angles
-        phis = [ get_dihedral_torch(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
-                 for j in range(1, cs.shape[1]-1) ]
+        phis = [ get_dihedral_torch(c_terms[i,j-1], n_terms[i,j], c_alphas[i,j], c_terms[i,j]) \
+                 for j in range(1, c_alphas.shape[-1]) ] # phi not allowed for first AA -> [1:] 
 
         phis_count.append( (np.array(phis)<0).sum() )
 
@@ -401,19 +413,32 @@ def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, verbose=0):
         print("Negative phis:", phis_count, "selected", idx)
     return preds[idx].unsqueeze(0), stresses[idx]
 
-def fix_mirrors_numpy(preds, stresses, N_mask, CA_mask, verbose=0):
+def fix_mirrors_numpy(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
-        Angle Phi between planes: (Ca{-1}, N, Ca{0}) and (Ca{0}, N{+1}, C_a{+1})
+        Angle Phi between planes: (Cterm{-1}, N, Ca{0}) and (N{0}, Ca{+1}, Cterm{+1})
+        * preds: (n_mirrors, 3, N)
+        * stresses: (n_mirrors, steps) historic stresses
+        * N_mask: (N, ) boolean mask for N-term positions
+        * CA_mask: (N, ) boolean mask for C-alpha positions
+        * C_mask: (N, ) or None. boolean mask for C-alpha positions or
+                    automatically calculate from N_mask and CA_mask if None.
+        * verbose: bool. verbosity level
     """ 
-    ns = np.transpose(preds, (0, 2, 1))[:, N_mask][:, 1:]
-    cs =  np.transpose(preds, (0, 2, 1))[:, CA_mask]
-    # compute phis and count lower than 0s
+    preds_ = np.transpose(preds, (0, 2, 1))
+    n_terms  = preds_[:, N_mask] 
+    c_alphas = preds_[:, CA_mask]
+    # select c_term auto if not passed
+    if C_mask is not None: 
+        c_terms = preds_[:, C_mask]
+    else:
+        c_terms  = preds_[:, (np.ones_like(N_mask)-N_mask-CA_mask).astype(bool) ]
+    # compute number of phis lower than 0
     phis_count = []
-    for i in range(cs.shape[0]):
+    for i in range(preds_.shape[0]):
         # calculate phi angles
-        phis = [ get_dihedral_numpy(cs[i,j-1], ns[i,j], cs[i,j], ns[i,j+1], cs[i,j+1]) \
-                 for j in range(1, cs.shape[1]-1) ]
+        phis = [ get_dihedral_numpy(c_terms[i,j-1], n_terms[i,j], c_alphas[i,j], c_terms[i,j]) \
+                 for j in range(1, c_alphas.shape[1]) ] # phi not allowed for first AA -> [1:]
 
         phis_count.append( (np.array(phis)<0).sum() )
 
@@ -540,7 +565,7 @@ def tmscore_numpy(X, Y):
 
 
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
-              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
+              fix_mirror=0, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
     # repeat for mirrors calculations
     pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
     # batched mds for full parallel 
@@ -549,10 +574,10 @@ def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
     if not fix_mirror:
         return preds[0], stresses[0]
 
-    return fix_mirrors_torch(preds, stresses, N_mask, CA_mask)
+    return fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask)
 
 def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
-              fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
+              fix_mirror=0, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
     preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
                                          tol=tol, verbose=verbose) \
                  for i in range( max(1,fix_mirror) )]
@@ -561,7 +586,7 @@ def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
         return preds[0]
 
     return fix_mirrors_numpy([x[0] for x in preds],
-                             [x[1] for x in preds], N_mask, CA_mask)
+                             [x[1] for x in preds], N_mask, CA_mask, C_mask)
 ################
 ### WRAPPERS ###
 ################
