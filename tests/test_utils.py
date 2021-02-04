@@ -18,3 +18,9 @@ def test_mds():
     )
 
     assert coords_3d.shape == (3, 128), 'coordinates must be of the right shape after MDS'
+
+def test_tmscore():
+    a = torch.randn(2, 3, 8)
+    b = torch.randn(2, 3, 8)
+    out = TMscore(a, b)
+    assert True

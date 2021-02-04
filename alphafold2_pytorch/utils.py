@@ -60,7 +60,12 @@ def invoke_torch_or_numpy(torch_fn, numpy_fn):
         @wraps(fn)
         def inner(*args, **kwargs):
             backend = kwargs.pop('backend')
-            passed_args, passed_kwargs = fn(*args, **kwargs)
+            passed_args = fn(*args, **kwargs)
+            passed_args = list(passed_args)
+            if isinstance(passed_args[-1], dict):
+                passed_kwargs = passed_args.pop()
+            else:
+                passed_kwargs = {}
             backend_fn = torch_fn if backend == 'torch' else numpy_fn
             return backend_fn(*passed_args, **passed_kwargs)
         return inner
@@ -542,7 +547,7 @@ def tmscore_numpy(X, Y):
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
               fix_mirror=0, N_mask=None, CA_mask=None, verbose=2):
     # repeat for mirrors calculations
-    pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
+    pre_dist_mat = repeat(pre_dist_mat, '() ni nj -> m ni nj', m = max(1, fix_mirror))
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                               tol=tol, verbose=verbose)
