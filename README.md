@@ -23,7 +23,8 @@ model = Alphafold2(
     dim = 256,
     depth = 2,
     heads = 8,
-    dim_head = 64
+    dim_head = 64,
+    reversible = False  # set this to True for fully reversible self / cross attention for the trunk
 ).cuda()
 
 seq = torch.randint(0, 21, (1, 128)).cuda()

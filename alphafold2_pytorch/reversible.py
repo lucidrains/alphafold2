@@ -8,6 +8,9 @@ from einops import reduce
 
 # helpers
 
+def exists(val):
+    return val is not None
+
 @contextmanager
 def null_context():
     yield
@@ -298,13 +301,22 @@ def irreversible_apply(inputs, ind, blocks, kwargs):
 # main reversible sequence class
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks):
+    def __init__(self, input_blocks):
         super().__init__()
+        blocks = nn.ModuleList([])
+
+        for self_attn_block, cross_attn_block in zip(*[iter(input_blocks)] * 2):
+            blocks.append(ReversibleSelfAttnBlock(*self_attn_block))
+            blocks.append(ReversibleCrossAttnBlock(*cross_attn_block))
+
         self.blocks = blocks
 
-    def forward(self, seq, msa, reverse = True, **kwargs):
+    def forward(self, seq, msa, mask = None, msa_mask = None, reverse = True):
+        assert exists(msa), 'reversibility does not work with no MSA sequences yet'
+        
         blocks = self.blocks
         seq, msa = list(map(lambda t: torch.cat((t, t), dim = -1), (seq, msa)))
+        kwargs = {'mask': mask, 'msa_mask': msa_mask}
 
         fn = reversible_apply if reverse else irreversible_apply
         ind = seq.shape[1]
@@ -318,5 +330,26 @@ class SequentialSequence(nn.Module):
         super().__init__()
         self.blocks = blocks
 
-    def forward(self, seq, msa, mask = None,  msa_mask = None, **kwargs):
-        return 0
+    def forward(self, x, m, mask = None,  msa_mask = None, **kwargs):
+        for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
+
+            # self attention
+
+            x = attn(x, mask = mask) + x
+
+            if exists(m):
+                m = msa_attn(m, mask = msa_mask) + m
+
+                # cross attention
+
+                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask) + m
+                x = cross_attn(x, m, mask = mask, context_mask = msa_mask) + x
+
+            # feedforwards
+
+            x = ff(x) + x
+
+            if exists(m):
+                m = msa_ff(m) + m
+
+        return x, m

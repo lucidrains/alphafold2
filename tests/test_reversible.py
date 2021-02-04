@@ -17,19 +17,19 @@ def test_reversible():
 
     layers = nn.ModuleList([])
     for _ in range(4):
-        layers.append(ReversibleSelfAttnBlock(
+        layers.append(nn.ModuleList([
            Attention(dim),
            FeedForward(dim),
            Attention(dim),
            FeedForward(dim) 
-        ))
+        ]))
 
-        layers.append(ReversibleCrossAttnBlock(
+        layers.append(nn.ModuleList([
            Attention(dim),
            FeedForward(dim),
            Attention(dim),
            FeedForward(dim) 
-        ))
+        ]))
 
     layers = ReversibleSequence(layers)
 

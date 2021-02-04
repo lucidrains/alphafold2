@@ -8,7 +8,7 @@ from math import sqrt
 from einops import rearrange, repeat
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.reversible import ReversibleSequence
+from alphafold2_pytorch.reversible import ReversibleSequence, SequentialSequence
 
 # helpers
 
@@ -28,9 +28,9 @@ class PreNorm(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
 
-    def forward(self, x, **kwargs):
+    def forward(self, x, *args, **kwargs):
         x = self.norm(x)
-        return self.fn(x, **kwargs)
+        return self.fn(x, *args, **kwargs)
 
 class GEGLU(nn.Module):
     def forward(self, x):
@@ -152,7 +152,8 @@ class Alphafold2(nn.Module):
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
         attn_dropout = 0.,
-        ff_dropout = 0.
+        ff_dropout = 0.,
+        reversible = False
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -171,22 +172,27 @@ class Alphafold2(nn.Module):
 
         wrapper = partial(PreNorm, dim)
 
-        self.layers = nn.ModuleList([])
+        layers = nn.ModuleList([])
         for _ in range(depth):
-            self.layers.append(nn.ModuleList([
+            layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
-
-        self.msa_layers = nn.ModuleList([])
-        for _ in range(depth):
-            self.msa_layers.append(nn.ModuleList([
+            layers.append(nn.ModuleList([
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                wrapper(FeedForward(dim = dim, dropout = ff_dropout))
+                wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
+
+        if not reversible:
+            layers = nn.ModuleList(list(map(lambda t: t[:3], layers))) # remove last feed forward if not reversible
+
+        trunk_class = SequentialSequence if not reversible else ReversibleSequence
+        self.net = trunk_class(layers)
 
         # to output
 
@@ -215,6 +221,7 @@ class Alphafold2(nn.Module):
 
         # embed multiple sequence alignment
 
+        m = None
         if exists(msa):
             msa_shape = msa.shape
 
@@ -234,37 +241,7 @@ class Alphafold2(nn.Module):
 
         # trunk
 
-        for ((attn, cross_attn, ff), (msa_attn, msa_cross_attn, msa_ff)) in zip(self.layers, self.msa_layers):
-
-            # self attention
-
-            x = attn(x, mask = x_mask) + x
-
-            if exists(msa):
-                m = msa_attn(m, mask = msa_mask) + m
-
-                # cross attention
-
-                m = msa_cross_attn(
-                    m,
-                    mask = msa_mask,
-                    context = x,
-                    context_mask = x_mask
-                ) + m
-
-                x = cross_attn(
-                    x,
-                    mask = x_mask,
-                    context = m,
-                    context_mask = msa_mask
-                ) + x
-
-            # feedforwards
-
-            x = ff(x) + x
-
-            if exists(msa):
-                m = msa_ff(m) + m
+        x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask)
 
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
