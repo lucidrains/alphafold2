@@ -18,17 +18,6 @@ def split_at_index(dim, index, t):
     r = (*pre_slices, slice(index, None))
     return t[l], t[r]
 
-def route_args(router, args, depth):
-    routed_args = [(dict(), dict()) for _ in range(depth)]
-    matched_keys = [key for key in args.keys() if key in router]
-
-    for key in matched_keys:
-        val = args[key]
-        for depth, ((f_args, g_args), routes) in enumerate(zip(routed_args, router[key])):
-            new_f_args, new_g_args = map(lambda route: ({key: val} if route else {}), routes)
-            routed_args[depth] = ({**f_args, **new_f_args}, {**g_args, **new_g_args})
-    return routed_args
-
 # function wrapper for determinism on backwards
 
 class Deterministic(nn.Module):
@@ -73,7 +62,7 @@ class ReversibleSelfAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)        
 
-    def forward(self, x, m, f_args = {}, j_args = {}, _reverse = True):
+    def forward(self, x, m, mask = None, msa_mask = None, _reverse = True):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -82,14 +71,14 @@ class ReversibleSelfAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, record_rng = record_rng, **f_args)
+            y1 = x1 + self.f(x2, record_rng = record_rng, mask = mask)
             y2 = x2 + self.g(y1, record_rng = record_rng)
-            n1 = m1 + self.j(m2, record_rng = record_rng, **j_args)
+            n1 = m1 + self.j(m2, record_rng = record_rng, mask = msa_mask)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, f_args = {}, j_args = {}):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None):
         y1, y2 = torch.chunk(y, 2, dim = 2)
         del y
 
@@ -111,7 +100,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             x2.requires_grad = True
-            fx2 = self.f(x2, set_rng = True, **f_args)
+            fx2 = self.f(x2, set_rng = True, mask = mask)
             torch.autograd.backward(fx2, dx1, retain_graph = True)
 
         with torch.no_grad():
@@ -146,7 +135,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             m2.requires_grad = True
-            fm2 = self.j(m2, set_rng=True, **j_args)
+            fm2 = self.j(m2, set_rng = True, mask = msa_mask)
             torch.autograd.backward(fm2, dm1, retain_graph=True)
 
         with torch.no_grad():
@@ -172,7 +161,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)
 
-    def forward(self, x, m, f_args = {}, j_args = {}, _reverse = True):
+    def forward(self, x, m, mask = None, msa_mask = None, _reverse = True):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -181,14 +170,14 @@ class ReversibleCrossAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, m2, record_rng = record_rng, **f_args)
-            y2 = x2 + self.g(y1, record_rng = record_rng, **j_args)
-            n1 = m1 + self.j(m2, y2, record_rng = record_rng, **f_args)
-            n2 = m2 + self.k(n1, record_rng = record_rng, **j_args)
+            y1 = x1 + self.f(x2, m2, record_rng = record_rng, mask = mask, context_mask = msa_mask)
+            y2 = x2 + self.g(y1, record_rng = record_rng)
+            n1 = m1 + self.j(m2, y2, record_rng = record_rng, mask = msa_mask, context_mask = mask)
+            n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, f_args = {}, j_args = {}):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None):
         n1, n2 = torch.chunk(n, 2, dim = 2)
         del n
 
@@ -217,7 +206,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             m2.requires_grad = True
             y2.requires_grad = True
-            fm2 = self.j(m2, y2, set_rng=True, **j_args)
+            fm2 = self.j(m2, y2, set_rng=True, mask = msa_mask, context_mask = mask)
             torch.autograd.backward(fm2, dm1)
 
         with torch.no_grad():
@@ -247,7 +236,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             x2.requires_grad = True
             m2.requires_grad = True
-            fx2 = self.f(x2, m2, set_rng = True, **f_args)
+            fx2 = self.f(x2, m2, set_rng = True, mask = mask, context_mask = msa_mask)
             torch.autograd.backward(fx2, dx1)
 
         with torch.no_grad():
@@ -275,8 +264,8 @@ class ReversibleFunction(Function):
     def forward(ctx, inp, ind, blocks, kwargs):
         x, m = split_at_index(1, ind, inp)
 
-        for block, block_kwargs in zip(blocks, kwargs):
-            x, m = block(x, m, *block_kwargs, _reverse = True)
+        for block in blocks:
+            x, m = block(x, m, _reverse = True, **kwargs)
 
         ctx.blocks = blocks
         ctx.kwargs = kwargs
@@ -292,8 +281,8 @@ class ReversibleFunction(Function):
         dy, dn = split_at_index(1, ind, d)
         y, n = ctx.saved_tensors
 
-        for block, block_kwargs in zip(blocks[::-1], kwargs):
-            y, n, dy, dn = block.backward_pass(y, n, dy, dn, *block_kwargs)
+        for block in blocks[::-1]:
+            y, n, dy, dn = block.backward_pass(y, n, dy, dn, **kwargs)
 
         d = torch.cat((dy, dn), dim = 1)
         return d, None, None, None
@@ -302,23 +291,20 @@ reversible_apply = ReversibleFunction.apply
 
 def irreversible_apply(inputs, ind, blocks, kwargs):
     x, m = split_at_index(1, ind, inputs)
-    for block, block_kwargs in zip(blocks, kwargs):
-        x, m = block(x, m, *block_kwargs, _reverse = False)
+    for block in blocks:
+        x, m = block(x, m, _reverse = False, **kwargs)
     return torch.cat((x, m), dim = 1)
 
 # main reversible sequence class
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks, args_route = {}):
+    def __init__(self, blocks):
         super().__init__()
         self.blocks = blocks
-        self.args_route = args_route
 
     def forward(self, seq, msa, reverse = True, **kwargs):
         blocks = self.blocks
         seq, msa = list(map(lambda t: torch.cat((t, t), dim = -1), (seq, msa)))
-
-        kwargs = route_args(self.args_route, kwargs, len(blocks))
 
         fn = reversible_apply if reverse else irreversible_apply
         ind = seq.shape[1]
@@ -326,3 +312,11 @@ class ReversibleSequence(nn.Module):
         out = fn(inp, ind, blocks, kwargs)
         seq, msa  = split_at_index(1, ind, out)
         return list(map(lambda t: reduce(t, 'b n (c d) -> b n d', 'mean', c = 2), (seq, msa)))
+
+class SequentialSequence(nn.Module):
+    def __init__(self, blocks):
+        super().__init__()
+        self.blocks = blocks
+
+    def forward(self, seq, msa, mask = None,  msa_mask = None, **kwargs):
+        return 0

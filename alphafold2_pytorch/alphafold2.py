@@ -156,7 +156,6 @@ class Alphafold2(nn.Module):
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
-
         self.pos_emb = nn.Embedding(max_seq_len, dim)
 
         # multiple sequence alignment position embedding
@@ -167,6 +166,8 @@ class Alphafold2(nn.Module):
         # custom embedding projection
 
         self.embedd_project = nn.Linear(num_embedds, dim)
+
+        # main trunk modules
 
         wrapper = partial(PreNorm, dim)
 
@@ -187,8 +188,12 @@ class Alphafold2(nn.Module):
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout))
             ]))
 
-        self.norm = nn.LayerNorm(dim)
-        self.to_distogram_logits = nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+        # to output
+
+        self.to_distogram_logits = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+        )
 
     def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
         n, device = seq.shape[1], seq.device
@@ -260,8 +265,6 @@ class Alphafold2(nn.Module):
 
             if exists(msa):
                 m = msa_ff(m) + m
-
-        x = self.norm(x)
 
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
