@@ -8,7 +8,7 @@ from math import sqrt
 from einops import rearrange, repeat
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.reversible import ReversibleSequence, SequentialSequence
+from alphafold2_pytorch.reversible import ReversibleSequence
 
 from se3_transformer_pytorch import SE3Transformer
 
@@ -152,6 +152,35 @@ class AxialAttention(nn.Module):
         return rearrange(out, 'b h w d -> b (h w) d')
 
 # main class
+
+class SequentialSequence(nn.Module):
+    def __init__(self, blocks):
+        super().__init__()
+        self.blocks = blocks
+
+    def forward(self, x, m, mask = None,  msa_mask = None, **kwargs):
+        for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
+
+            # self attention
+
+            x = attn(x, mask = mask) + x
+
+            if exists(m):
+                m = msa_attn(m, mask = msa_mask) + m
+
+                # cross attention
+
+                x = cross_attn(x, m, mask = mask, context_mask = msa_mask) + x
+                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask) + m
+
+            # feedforwards
+
+            x = ff(x) + x
+
+            if exists(m):
+                m = msa_ff(m) + m
+
+        return x, m
 
 class Alphafold2(nn.Module):
     def __init__(
