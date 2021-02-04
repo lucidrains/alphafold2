@@ -176,12 +176,17 @@ class Alphafold2(nn.Module):
 
         layers = nn.ModuleList([])
         for _ in range(depth):
+
+            # self attention, for both main sequence and msa
+
             layers.append(nn.ModuleList([
                 wrapper(AxialAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
                 wrapper(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
+
+            # cross attention, for main sequence -> msa and then msa -> sequence
 
             layers.append(nn.ModuleList([
                 wrapper(Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
@@ -247,7 +252,7 @@ class Alphafold2(nn.Module):
 
         # structural refinement
 
-        # TODO - use SE3Transformer here, as details emerge about the iterative refinement, fill-in here
+        ### TODO - use SE3Transformer here, as details emerge about the iterative refinement, fill-in here
 
         # final out, do alphafold1's distogram for now
 
