@@ -48,6 +48,36 @@ coords_3d, _ = MDScaling(distances,
 )
 ```
 
+## Sparse Attention
+
+You can train with Microsoft Deepspeed's <a href="https://www.deepspeed.ai/news/2020/09/08/sparse-attention.html">Sparse Attention</a>, but you will have to endure the installation process. It is two-steps.
+
+First, you need to install Deepspeed with Sparse Attention
+
+```bash
+$ sh install_deepspeed.sh
+```
+
+Next, you need to install the pip package `triton`
+
+```bash
+$ pip install triton
+```
+
+If both of the above succeeded, now you can train with Sparse Attention!
+
+Sadly, the sparse attention is only supported for self attention, and not cross attention. I will bring in a different solution for making cross attention performant.
+
+```python
+model = Alphafold2(
+    dim = 256,
+    depth = 12,
+    heads = 8,
+    dim_head = 64,
+    sparse_self_attn = (True, False) * 6  # interleave sparse and full attention for all 12 layers
+).cuda()
+```
+
 ## Testing
 
 ```bash
