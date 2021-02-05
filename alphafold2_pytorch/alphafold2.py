@@ -78,7 +78,7 @@ class Attention(nn.Module):
     def __init__(
         self,
         dim,
-        seq_len,
+        seq_len = None,
         heads = 8,
         dim_head = 64,
         dropout = 0.
@@ -126,6 +126,7 @@ class SparseAttention(Attention):
         **kwargs
     ):
         super().__init__(*args, **kwargs)
+        assert exists(self.seq_len), '`seq_len` must be defined if using sparse attention class'
         from deepspeed.ops.sparse_attention import SparseSelfAttention, VariableSparsityConfig
         self.block_size = block_size
         num_random_blocks = default(num_random_blocks, self.seq_len // block_size // 4)
