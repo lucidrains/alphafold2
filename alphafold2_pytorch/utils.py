@@ -225,8 +225,8 @@ def sidechain_container(seqs, backbones, place_oxygen=False,
         Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
     """
     batch, length = list(seqs.shape[:2])
-    new_coords = torch.ones(batch, length, NUM_COORDS_PER_RES, 3) * padding
-    new_coords[:, :, :3] = rearrange(backbone, 'b (l back) d -> b l back d', l=length)
+    new_coords = torch.ones(batch, length, NUM_COORDS_PER_RES, 3, device=backbones.device) * padding
+    new_coords[:, :, :3] = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set the rest of positions to c_alpha
     new_coords[:, :, 3:] = repeat(new_coords[:, :, 2], 'b l d -> b l scn d', scn=11)
     # hard-calculate oxygen position of carbonyl group
@@ -236,7 +236,7 @@ def sidechain_container(seqs, backbones, place_oxygen=False,
             for i,token in enumerate(seq):
                 # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
                 # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-                psi = get_dihedral_torch(*backbone[s, i*3 + 0 : i*3 + 4] )if i < length-1 else None
+                psi = get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else None
                 # the angle for placing oxygen is opposite to psi of current res.
                 # not available for last one so pi/4 taken for now
                 dihedral = psi - np.pi if i < length-1 else np.pi/4
