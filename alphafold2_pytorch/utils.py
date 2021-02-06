@@ -60,7 +60,12 @@ def invoke_torch_or_numpy(torch_fn, numpy_fn):
         @wraps(fn)
         def inner(*args, **kwargs):
             backend = kwargs.pop('backend')
-            passed_args, passed_kwargs = fn(*args, **kwargs)
+            passed_args = fn(*args, **kwargs)
+            passed_args = list(passed_args)
+            if isinstance(passed_args[-1], dict):
+                passed_kwargs = passed_args.pop()
+            else:
+                passed_kwargs = {}
             backend_fn = torch_fn if backend == 'torch' else numpy_fn
             return backend_fn(*passed_args, **passed_kwargs)
         return inner
@@ -514,12 +519,13 @@ def gdt_torch(X, Y, cutoffs, weights=None):
         * cutoffs is a list of `K` thresholds
         * weights is a list of `K` weights (1 x each threshold)
     """
+    device = X.device
     if weights is None:
         weights = torch.ones(1,len(cutoffs))
     else:
-        weights = torch.tensor([weights]).to(x.device)
+        weights = torch.tensor([weights]).to(device)
     # set zeros and fill with values
-    GDT = torch.zeros(X.shape[0], len(cutoffs), device=X.device) 
+    GDT = torch.zeros(X.shape[0], len(cutoffs), device=device)
     dist = ((X - Y)**2).sum(dim=1).sqrt()
     # iterate over thresholds
     for i,cutoff in enumerate(cutoffs):
@@ -567,7 +573,7 @@ def tmscore_numpy(X, Y):
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
               fix_mirror=0, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
     # repeat for mirrors calculations
-    pre_dist_mat = repeat(pre_dist_mat, 'ni nj -> m ni nj', m = max(1,fix_mirror))
+    pre_dist_mat = repeat(pre_dist_mat, '() ni nj -> m ni nj', m = max(1, fix_mirror))
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                               tol=tol, verbose=verbose)
@@ -663,7 +669,7 @@ def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
     # define cutoffs for each type of gdt and weights
     cutoffs = [0.5,1,2,4] if mode in ["HA", "ha"] else [1,2,4,8]
     # calculate GDT
-    return (A, B, cutoffs), {'weights': weights}
+    return A, B, cutoffs, {'weights': weights}
 
 @expand_arg_dims()
 @set_backend_kwarg

@@ -324,32 +324,3 @@ class ReversibleSequence(nn.Module):
         out = fn(inp, ind, blocks, kwargs)
         seq, msa  = split_at_index(1, ind, out)
         return list(map(lambda t: reduce(t, 'b n (c d) -> b n d', 'mean', c = 2), (seq, msa)))
-
-class SequentialSequence(nn.Module):
-    def __init__(self, blocks):
-        super().__init__()
-        self.blocks = blocks
-
-    def forward(self, x, m, mask = None,  msa_mask = None, **kwargs):
-        for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
-
-            # self attention
-
-            x = attn(x, mask = mask) + x
-
-            if exists(m):
-                m = msa_attn(m, mask = msa_mask) + m
-
-                # cross attention
-
-                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask) + m
-                x = cross_attn(x, m, mask = mask, context_mask = msa_mask) + x
-
-            # feedforwards
-
-            x = ff(x) + x
-
-            if exists(m):
-                m = msa_ff(m) + m
-
-        return x, m
