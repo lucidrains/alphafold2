@@ -494,12 +494,13 @@ def gdt_torch(X, Y, cutoffs, weights=None):
         * cutoffs is a list of `K` thresholds
         * weights is a list of `K` weights (1 x each threshold)
     """
+    device = X.device
     if weights is None:
         weights = torch.ones(1,len(cutoffs))
     else:
-        weights = torch.tensor([weights]).to(x.device)
+        weights = torch.tensor([weights]).to(device)
     # set zeros and fill with values
-    GDT = torch.zeros(X.shape[0], len(cutoffs), device=X.device) 
+    GDT = torch.zeros(X.shape[0], len(cutoffs), device=device)
     dist = ((X - Y)**2).sum(dim=1).sqrt()
     # iterate over thresholds
     for i,cutoff in enumerate(cutoffs):
@@ -643,7 +644,7 @@ def GDT(A, B, *, mode="TS", cutoffs=[1,2,4,8], weights=None):
     # define cutoffs for each type of gdt and weights
     cutoffs = [0.5,1,2,4] if mode in ["HA", "ha"] else [1,2,4,8]
     # calculate GDT
-    return (A, B, cutoffs), {'weights': weights}
+    return A, B, cutoffs, {'weights': weights}
 
 @expand_arg_dims()
 @set_backend_kwarg
