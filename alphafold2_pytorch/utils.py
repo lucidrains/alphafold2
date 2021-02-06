@@ -10,7 +10,7 @@ import mdtraj
 try:
     from sidechainnet.sequence.utils import VOCAB
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
-    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, SC_BUILD_INFO
+    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 except:
     NUM_COORDS_PER_RES = 14
@@ -182,6 +182,34 @@ def scn_backbone_mask(scn_seq, bool=True, l_aa=NUM_COORDS_PER_RES):
 
     return lengths[N_mask], lengths[CA_mask]
 
+def nerf_torch(a, b, c, l, theta, chi):
+    """ Custom Natural extension of Reference Frame. 
+        Inputs:
+        * a: (3, ). point of the plane, not connected to d
+        * b: (3, ). point of the plane, not connected to d
+        * c: (3, ). point of the plane, connected to c
+        * theta: float.  angle between b-c-d
+        * chi: float. dihedral angle between the a-b-c and b-c-d planes
+        Outputs: d (3,). the next point in the sequence, linked to c
+    """
+    # safety check
+    if not (-np.pi <= theta <= np.pi):
+        raise ValueError(f"theta must be in radians and in [-pi, pi]. theta = {theta}")
+    # calc vecs
+    ba = b-a
+    cb = c-b
+    # calc rotation matrix. based on plane normals and normalized
+    n_plane  = torch.cross(ba, cb)
+    n_plane_ = torch.cross(n_plane, cb)
+    rotate   = torch.stack([cb, n_plane_, n_plane], dim=1)
+    rotate  /= torch.norm(rotate, dim=0)
+    # calc proto point, rotate
+    d = torch.tensor([[-torch.cos(theta)],
+                      [torch.sin(theta) * torch.cos(chi)],
+                      [torch.sin(theta) * torch.sin(chi)]], device=a.device)
+    # extend base point, set length
+    return c + l * torch.mm(rotate, d).squeeze()
+
 def sidechain_container(seqs, backbones, place_oxygen=False,
                         n_atoms=NUM_COORDS_PER_RES, padding=GLOBAL_PAD_CHAR):
     """ Gets a backbone of the protein, returns the whole coordinates
@@ -190,7 +218,8 @@ def sidechain_container(seqs, backbones, place_oxygen=False,
         * seqs: (bacth, L,) tensor of ints. sequence tokens.
         * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
                     Coords for (N-term, C-alpha, C-term) of every aa.
-        * place_oxygen: whether to claculate the oxygen of the carbonyl group via NeRF
+        * place_oxygen: whether to claculate the oxygen of the
+                        carbonyl group via NeRF
         * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
         * padding: int. padding token. same as in sidechainnet: 0
         Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
@@ -208,8 +237,15 @@ def sidechain_container(seqs, backbones, place_oxygen=False,
                 # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
                 # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
                 psi = get_dihedral_torch(*backbone[s, i*3 + 0 : i*3 + 4] )if i < length-1 else None
-                # yet to be done
-                raise NotImplementedError("Still not implemented")
+                # the angle for placing oxygen is opposite to psi of current res.
+                # not available for last one so pi/4 taken for now
+                dihedral = psi - np.pi if i < length-1 else np.pi/4
+                new_coords[:, i, 3] = nerf_torch(new_coords[:, i, 0], 
+                                                 new_coords[:, i, 1], 
+                                                 new_coords[:, i, 2], 
+                                                 BB_BUILD_INFO["BONDLENS"]["c-o"], 
+                                                 torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]),
+                                                 dihedral)
     return new_coords
 
 
