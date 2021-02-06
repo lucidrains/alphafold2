@@ -161,13 +161,13 @@ for _ in range(NUM_BATCHES):
         coords_3d = rearrange(coords_3d, 'd n -> () n d')
 
         ## TODO: build whole sidechain coords. not just container
-        sidechain_3d = build_sidechain(seq, coords_3d, force=True) # (batch, l, c, d)
-        sidechain_3d = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
+        proto_sidechain = sidechain_container(seq, coords_3d, place_oxygen=False) # (batch, l, c, d)
+        proto_sidechain = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
         
         ## refine
         # sample tokens for now based on indices
         atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=seq.shape[0]) % NUM_COORDS_PER_RES
-        refined = refiner(atom_tokens[cloud_mask], sidechain_3d[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
+        refined = refiner(atom_tokens[cloud_mask], proto_sidechain[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
         coords_aligned = Kabsch(refined, coords[cloud_mask])
