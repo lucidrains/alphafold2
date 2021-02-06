@@ -262,6 +262,7 @@ class Alphafold2(nn.Module):
 
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
+        self.pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
         # multiple sequence alignment position embedding
 
@@ -324,9 +325,17 @@ class Alphafold2(nn.Module):
         # embed main sequence
 
         x = self.token_emb(seq)
-        x += self.pos_emb(torch.arange(n, device = device))[None, ...]
-        x = x[:, :, None, :] + x[:, None, :, :] # create pair-wise residue embeds
-        x_mask = mask[:, :, None] * mask[:, None, :]
+
+        # use axial positional embedding
+
+        seq_range = torch.arange(n, device = device)
+        ax1 = x + self.pos_emb(seq_range)[None, ...]
+        ax2 = x + self.pos_emb_ax(seq_range)[None, ...]
+
+        # outer sum
+
+        x = rearrange(ax1, 'b i d -> b i () d') + rearrange(ax2, 'b j d-> b () j d') # create pair-wise residue embeds
+        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j')
 
         x = rearrange(x, 'b i j d -> b (i j) d')
         x_mask = rearrange(x_mask, 'b i j -> b (i j)')
@@ -345,7 +354,7 @@ class Alphafold2(nn.Module):
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-            m = m[:, :, None, :] + m[:, None, :, :]
+            m = rearrange(m, 'b i d -> b i () d') + rearrange(m, 'b j d -> b () j d')
             m = rearrange(m, 'b m n d -> b (m n) d')
 
         if exists(msa_mask):
