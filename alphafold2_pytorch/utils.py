@@ -15,6 +15,8 @@ try:
 except:
     NUM_COORDS_PER_RES = 14
     GLOBAL_PAD_CHAR = 0
+    BB_BUILD_INFO = {"BONDLENS": {"c-o": 1.229},
+                     "BONDANGS": {"ca-c-o": 2.0944}}
 
 # own
 
@@ -167,7 +169,7 @@ def scn_cloud_mask(scn_seq, boolean=True):
         return mask.bool()
     return mask.nonzero()
 
-def scn_backbone_mask(scn_seq, bool=True, l_aa=NUM_COORDS_PER_RES):
+def scn_backbone_mask(scn_seq, boolean=True, l_aa=NUM_COORDS_PER_RES):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
         * scn_seq: sequence as provided by Sidechainnet package
@@ -237,17 +239,17 @@ def sidechain_container(backbones, place_oxygen=False,
         for s in range(batch):
             # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
             # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-            psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi/4 \
+            psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
                                   for i in range(length) ])
             # the angle for placing oxygen is opposite to psi of current res.
             # psi not available for last one so pi/4 taken for now
-            correction = torch.tensor([ -np.pi if i< length-1 else 0 for i in range(length)], device=psis.device)
+            bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
+            bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
+            correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
             new_coords[:, :, 3] = nerf_torch(new_coords[:, :, 0], 
                                              new_coords[:, :, 1], 
                                              new_coords[:, :, 2], 
-                                             BB_BUILD_INFO["BONDLENS"]["c-o"], 
-                                             torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]),
-                                             dihedral + correction)
+                                             bond_lens, bond_angs, psis + correction)
     return new_coords
 
 
@@ -447,9 +449,9 @@ def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
     if C_mask is not None: 
         c_terms = preds_[:, C_mask]
     else:
-        c_terms  = preds_[ :, torch.logical_not(torch.logical_or(N_mask-CA_mask)).squeeze() ]
+        c_terms  = preds_[ :, torch.logical_not(torch.logical_or(N_mask,CA_mask)).squeeze() ]
     # compute phis and count lower than 0s
-    phis_count = [ (get_dihedral_torch(c_terms[i,:-1], n_terms[i,:], c_alphas[i,:], c_terms[i,:])<0).sum().item() \
+    phis_count = [ (get_dihedral_torch(c_terms[i,:-1], n_terms[i, 1:], c_alphas[i, 1:], c_terms[i, 1:])<0).sum().item() \
                    for i in range(preds.shape[0])]
 
     idx = np.argmax(phis_count)

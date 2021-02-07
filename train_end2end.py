@@ -158,10 +158,9 @@ for _ in range(NUM_BATCHES):
             N_mask = N_mask,
             CA_mask = CA_mask
         ) 
-        coords_3d = rearrange(coords_3d, 'd n -> () n d')
 
-        ## TODO: build whole sidechain coords. not just container
-        proto_sidechain = sidechain_container(seq, coords_3d, place_oxygen=False) # (batch, l, c, d)
+        # build SC container. set SC points to CA and optionally place carbonyl O
+        proto_sidechain = sidechain_container(seq, coords_3d, place_oxygen=False)
         proto_sidechain = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
         
         ## refine
