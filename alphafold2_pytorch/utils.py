@@ -8,7 +8,7 @@ from einops import rearrange, repeat
 # bio
 import mdtraj
 try:
-    from sidechainnet.utils.sequence import VOCAB
+    from sidechainnet.utils.sequence import VOCAB, ONE_TO_THREE_LETTER_MAP
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
     from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
@@ -162,7 +162,10 @@ def scn_cloud_mask(scn_seq, boolean=True):
     for n in range(len(mask)):
         for i,aa in enumerate(scn_seq.cpu().numpy()):
             # get num of atom positions - backbone is 4: ...N-C-C(=O)...
-            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(i)]["atom-names"] )
+            aa_names = list(map(VOCAB.int2chars, aa))
+            atom_names_list = list(map(lambda t: SC_BUILD_INFO[t]['atom-names'], aa_names))
+            flattened_atom_names = [atom_name for atom_names in atom_names_list for atom_name in atom_names]
+            n_atoms = 4+len( flattened_atom_names )
             mask[n, i, :n_atoms] = 1
     if boolean:
         return mask.bool()
