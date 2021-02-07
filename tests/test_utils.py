@@ -10,7 +10,7 @@ def test_center_distogram_median():
 def test_masks():
     seqs = torch.randint(20, size=(2, 50))
     # cloud point mask - can't test bc it needs sidechainnet installed
-    # cloud_masks = scn_cloud_mask(seqs, boolean=True)
+    cloud_masks = scn_cloud_mask(seqs, boolean=True)
     # atom masking
     N_mask, CA_mask = scn_backbone_mask(seqs, boolean = True, l_aa = 3)
     assert True
