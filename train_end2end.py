@@ -111,8 +111,8 @@ for _ in range(NUM_BATCHES):
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE)
         # coords = rearrange(coords, 'b (l c) d -> b l c d', l = l) # no need to rearrange for now
         # mask the atoms and backbone positions for each residue
-        N_mask, CA_mask = scn_backbone_mask(seq, bool = True, l_aa = 3) # NUM_COORDS_PER_RES
-        cloud_mask = scn_cloud_mask(seq, bool = False, current_mask = mask)
+        N_mask, CA_mask = scn_backbone_mask(seq, boolean = True, l_aa = 3) # NUM_COORDS_PER_RES
+        cloud_mask = scn_cloud_mask(seq, boolean = False, current_mask = mask)
         # flatten last dims for point cloud maskinga and chain masking (cloud and sidechainnet). 
         chain_mask = (mask * cloud_mask)
         cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l).bool()
