@@ -8,7 +8,7 @@ from einops import rearrange, repeat
 # bio
 import mdtraj
 try:
-    from sidechainnet.sequence.utils import VOCAB
+    from sidechainnet.utils.sequence import VOCAB
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
     from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
@@ -154,16 +154,15 @@ def scn_cloud_mask(scn_seq, boolean=True):
         Inputs: 
         * scn_seq: (batch, length) sequence as provided by Sidechainnet package
         * boolean: whether to return as array of idxs or boolean values
-        * mask: (batch, length). current mask to build a custom chain_mask 
         Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask 
     """
     # scaffolds 
-    mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=snc_seq.device)
+    mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=scn_seq.device)
     # fill 
-    for n in range(len(masks)):
+    for n in range(len(mask)):
         for i,aa in enumerate(scn_seq.cpu().numpy()):
             # get num of atom positions - backbone is 4: ...N-C-C(=O)...
-            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(x)]["atom-names"] )
+            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(i)]["atom-names"] )
             mask[n, i, :n_atoms] = 1
     if boolean:
         return mask.bool()
