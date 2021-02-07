@@ -162,7 +162,7 @@ def scn_cloud_mask(scn_seq, boolean=True):
     for n in range(len(mask)):
         for i,aa in enumerate(scn_seq.cpu().numpy()):
             # get num of atom positions - backbone is 4: ...N-C-C(=O)...
-            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(i)]["atom-names"] )
+            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(aa)]["atom-names"] )
             mask[n, i, :n_atoms] = 1
     if boolean:
         return mask.bool()
