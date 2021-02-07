@@ -447,7 +447,7 @@ def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
     if C_mask is not None: 
         c_terms = preds_[:, C_mask]
     else:
-        c_terms  = preds_[:, (torch.ones(*N_mask.shape)-N_mask-CA_mask).squeeze().bool() ]
+        c_terms  = preds_[ :, torch.logical_not(torch.logical_or(N_mask-CA_mask)).squeeze() ]
     # compute phis and count lower than 0s
     phis_count = [ (get_dihedral_torch(c_terms[i,:-1], n_terms[i,:], c_alphas[i,:], c_terms[i,:])<0).sum().item() \
                    for i in range(preds.shape[0])]
