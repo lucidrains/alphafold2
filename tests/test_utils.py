@@ -63,7 +63,7 @@ def test_nerf_and_dihedral():
 def test_sidechain_container():
     bb = torch.randn(2, 137*3, 3)
     proto_3d = sidechain_container(bb, place_oxygen=True)
-    assert list(proto_3d.shape) = [2, 137, 14, 3]
+    assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 def test_kabsch():
     a  = torch.randn(3, 8)
