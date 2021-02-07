@@ -111,8 +111,8 @@ for _ in range(NUM_BATCHES):
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE)
         # coords = rearrange(coords, 'b (l c) d -> b l c d', l = l) # no need to rearrange for now
         # mask the atoms and backbone positions for each residue
-        N_mask, CA_mask = scn_backbone_mask(seq, bool = True, l_aa = 3) # NUM_COORDS_PER_RES
-        cloud_mask = scn_cloud_mask(seq, bool = False, current_mask = mask)
+        N_mask, CA_mask = scn_backbone_mask(seq, boolean = True, l_aa = 3) # NUM_COORDS_PER_RES
+        cloud_mask = scn_cloud_mask(seq, boolean = False, current_mask = mask)
         # flatten last dims for point cloud maskinga and chain masking (cloud and sidechainnet). 
         chain_mask = (mask * cloud_mask)
         cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l).bool()
@@ -158,16 +158,15 @@ for _ in range(NUM_BATCHES):
             N_mask = N_mask,
             CA_mask = CA_mask
         ) 
-        coords_3d = rearrange(coords_3d, 'd n -> () n d')
 
-        ## TODO: build whole sidechain coords. not just container
-        sidechain_3d = build_sidechain(seq, coords_3d, force=True) # (batch, l, c, d)
-        sidechain_3d = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
+        # build SC container. set SC points to CA and optionally place carbonyl O
+        proto_sidechain = sidechain_container(seq, coords_3d, place_oxygen=False)
+        proto_sidechain = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
         
         ## refine
         # sample tokens for now based on indices
         atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=seq.shape[0]) % NUM_COORDS_PER_RES
-        refined = refiner(atom_tokens[cloud_mask], sidechain_3d[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
+        refined = refiner(atom_tokens[cloud_mask], proto_sidechain[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
         coords_aligned = Kabsch(refined, coords[cloud_mask])
