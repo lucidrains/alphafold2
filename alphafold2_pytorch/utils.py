@@ -8,10 +8,12 @@ from einops import rearrange, repeat
 # bio
 import mdtraj
 try:
-    from sidechainnet.utils.sequence import VOCAB
+    from sidechainnet.utils.sequence import ProteinVocabulary as VOCAB
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
     from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
+    # build vocablary
+    VOCAB = VOCAB()
 except:
     NUM_COORDS_PER_RES = 14
     GLOBAL_PAD_CHAR = 0
@@ -159,13 +161,10 @@ def scn_cloud_mask(scn_seq, boolean=True):
     # scaffolds 
     mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=scn_seq.device)
     # fill 
-    for n in range(len(mask)):
-        for i,aa in enumerate(scn_seq.cpu().numpy()):
+    for n, seq in enumerate(scn_seq.cpu().numpy()):
+        for i,aa in enumerate(seq):
             # get num of atom positions - backbone is 4: ...N-C-C(=O)...
-            aa_names = list(map(VOCAB.int2chars, aa))
-            atom_names_list = list(map(lambda t: SC_BUILD_INFO[t]['atom-names'], aa_names))
-            flattened_atom_names = [atom_name for atom_names in atom_names_list for atom_name in atom_names]
-            n_atoms = 4+len( flattened_atom_names )
+            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(aa)]["atom-names"] )
             mask[n, i, :n_atoms] = 1
     if boolean:
         return mask.bool()
@@ -271,35 +270,35 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     """
     shape, device = distogram.shape, distogram.device
     # threshold to weights and find mean value of each bin
-    n_bins = bins - 0.5 * (bins[2] - bins[1])
+    n_bins = ( bins - 0.5 * (bins[2] - bins[1]) ).to(device)
     n_bins[0]  = 1.5
-    # TODO: adapt so that mean option considers IGNORE_INDEX
-    n_bins[-1] = n_bins[-1]
-    n_bins = n_bins.to(device)
+    n_bins[-1] = 1.33*bins[-1] # above last threshold is ignored
+    max_bin_allowed = torch.tensor(n_bins.shape[0]-1).to(device).long()
     # calculate measures of centrality and dispersion - 
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
         medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], 1, device=device)
         central  = torch.searchsorted(cum_dist, medium).squeeze()
-        central  = n_bins[ torch.minimum(central, 
-                                         torch.tensor( len(n_bins)-1 ).long().to(device) ) ].unsqueeze(dim=0)
+        central  = n_bins[ torch.min(central, max_bin_allowed) ]
     elif center == "mean":
         central  = (distogram * n_bins).sum(dim=-1)
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist 
     diag = np.arange(shape[-2])
+    central = expand_dims_to(central, 3 - len(central.shape))
     central[:, diag, diag] = 0.
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
     elif wide == "std":
+
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
         dispersion = torch.zeros_like(central, device=central.device)
-    # rescale to 0-1. lower std / var  --> weight=1
+    # rescale to 0-1. lower std / var  --> weight=1. set potential nan's to 0
     weights = mask / (1+dispersion)
-
+    weights[weights != weights] = 0.
     return central, weights
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
