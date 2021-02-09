@@ -78,6 +78,13 @@ model = Alphafold2(
 ).cuda()
 ```
 
+## Equivariant Attention
+
+There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
+
+- <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
+- <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
+
 ## Testing
 
 ```bash
@@ -101,24 +108,9 @@ $ git clone https://github.com/jonathanking/sidechainnet.git
 $ cd sidechainnet && pip install -e .
 ```
 
-## Related repositories
-
-~~I have started construction of two approaches to equivariant self-attention. Both are still works in progress but should be done by end of January. Feel free to contribute.~~
-
-There are two equivariant self-attention solutions we can use.
-
-Update - SE3 Transformers is in a good place, but Lie Transformer could use a code review, specifically how the location attention is handled
-
-Update - Received confirmation that Lie Transformer implementation is correct from the paper authors
-
-- [x] https://github.com/lucidrains/se3-transformer-pytorch
-- [x] https://github.com/lucidrains/lie-transformer-pytorch
-
 ## Speculation
 
 https://xukui.cn/alphafold2.html
-
-https://fabianfuchsml.github.io/alphafold2/
 
 https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-ones-child-has-left-home/
 
