@@ -5,7 +5,7 @@ from functools import partial
 import torch.nn.functional as F
 
 from math import sqrt
-from einops import rearrange, repeat
+from einops import rearrange, repeat, reduce
 
 import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.reversible import ReversibleSequence
@@ -81,7 +81,8 @@ class Attention(nn.Module):
         seq_len = None,
         heads = 8,
         dim_head = 64,
-        dropout = 0.
+        dropout = 0.,
+        compress_ratio = 1,
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -94,18 +95,46 @@ class Attention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        # memory compressed attention
+        self.compress_ratio = compress_ratio
+        self.compress_fn = nn.Conv1d(inner_dim, inner_dim, compress_ratio, stride = compress_ratio, groups = heads) if compress_ratio > 1 else None
+
     def forward(self, x, context = None, mask = None, context_mask = None):
         device, h, has_context = x.device, self.heads, exists(context)
         context = default(context, x)
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
+
+        i, j = q.shape[-2], k.shape[-2]
+
+        if exists(self.compress_fn):
+            assert has_context, 'memory compressed attention only works in the context of cross attention for now'
+
+            ratio = self.compress_ratio
+            padding = ratio - (j % ratio)
+
+            if padding < ratio:
+                k, v = map(lambda t: F.pad(t, (0, 0, 0, padding), value = 0), (k ,v))
+
+                if exists(context_mask):
+                    context_mask = F.pad(context_mask, (0, padding), value = False)
+
+                k, v = map(lambda t: rearrange(t, 'b n c -> b c n'), (k, v))
+                k, v = map(self.compress_fn, (k, v))
+                k, v = map(lambda t: rearrange(t, 'b c n -> b n c'), (k, v))
+
+                context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
+                context_mask = context_mask > 0
+
+                j = (j + padding) // ratio
+
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
         dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
         if exists(mask) or exists(context_mask):
-            mask = default(mask, lambda: torch.ones(*x.shape[:2], device = device))
-            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(*context.shape[:2], device = device))
+            mask = default(mask, lambda: torch.ones(i, device = device))
+            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(j, device = device))
             mask_value = -torch.finfo(dots.dtype).max
             mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots.masked_fill_(~mask, mask_value)
@@ -255,7 +284,8 @@ class Alphafold2(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         reversible = False,
-        sparse_self_attn = False
+        sparse_self_attn = False,
+        cross_attn_compress_ratio = 1,
     ):
         super().__init__()
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
@@ -295,9 +325,9 @@ class Alphafold2(nn.Module):
             # cross attention, for main sequence -> msa and then msa -> sequence
 
             layers.append(nn.ModuleList([
-                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 

@@ -78,6 +78,20 @@ model = Alphafold2(
 ).cuda()
 ```
 
+## Memory Compressed Attention
+
+To save on memory for cross attention, you can set a compression ratio for the key / values, following the scheme laid out in <a href="https://arxiv.org/abs/1801.10198">this paper</a>. A compression ratio of 2-4 is usually acceptable.
+
+```python
+model = Alphafold2(
+    dim = 256,
+    depth = 12,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_compress_ratio = 3
+).cuda()
+```
+
 ## Equivariant Attention
 
 There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
