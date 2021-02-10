@@ -402,4 +402,4 @@ class Alphafold2(nn.Module):
 
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        return self.to_distogram_logits(x)
+        return self.to_distogram_logits(x), x, m # NOTE for experiments, currently x is the out of self.net()
