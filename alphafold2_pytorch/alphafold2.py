@@ -99,8 +99,17 @@ class Attention(nn.Module):
         self.compress_ratio = compress_ratio
         self.compress_fn = nn.Conv1d(inner_dim, inner_dim, compress_ratio, stride = compress_ratio, groups = heads) if compress_ratio > 1 else None
 
-    def forward(self, x, context = None, mask = None, context_mask = None):
-        device, h, has_context = x.device, self.heads, exists(context)
+    def forward(self, x, context = None, mask = None, context_mask = None, lead_dims = None):
+        device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
+
+        if exists(lead_dims):
+            x = x.reshape(*lead_dims, -1)
+            x = x.reshape(-1, *x.shape[-2:])
+
+            if exists(mask):
+                mask = mask.view(*lead_dims)
+                mask = mask.reshape(-1, *mask.shape[-1:])
+
         context = default(context, x)
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
@@ -134,8 +143,8 @@ class Attention(nn.Module):
         dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
         if exists(mask) or exists(context_mask):
-            mask = default(mask, lambda: torch.ones(i, device = device))
-            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(j, device = device))
+            mask = default(mask, lambda: torch.ones(1, i, device = device).bool())
+            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(1, j, device = device).bool())
             mask_value = -torch.finfo(dots.dtype).max
             mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots.masked_fill_(~mask, mask_value)
@@ -145,7 +154,12 @@ class Attention(nn.Module):
 
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
+        out = self.to_out(out)
+
+        if exists(lead_dims):
+            out = out.reshape(*orig_shape)
+
+        return out
 
 class SparseAttention(Attention):
     def __init__(
@@ -172,9 +186,20 @@ class SparseAttention(Attention):
             attn_mask_mode = 'add'
         )
 
-    def forward(self, x, mask = None):
-        device, h = x.device, self.heads
-        b, n = x.shape[:2]
+    def forward(self, x, mask = None, lead_dims = None):
+        device, orig_shape, h = x.device, x.shape, self.heads
+        # reshape if leading dimensions are specified
+        # for only restricting to intra MSA attention
+
+        if exists(lead_dims):
+            x = x.reshape(*lead_dims, -1)
+            x = x.reshape(-1, *x.shape[-2:])
+
+            if exists(mask):
+                mask = mask.view(*lead_dims)
+                mask = mask.reshape(-1, *mask.shape[-1:])
+
+        b, n, _ = x.shape
         assert n <= self.seq_len, f'either the AA sequence length {n} or the total MSA length {n} exceeds the allowable sequence length {self.seq_len} for sparse attention, set by `max_seq_len`'
 
         remainder = x.shape[1] % self.block_size
@@ -197,7 +222,12 @@ class SparseAttention(Attention):
         out = self.attn_fn(q, k, v, key_padding_mask = key_pad_mask)
         out = rearrange(out, 'b h n d -> b n (h d)')
         out = self.to_out(out)
-        return out[:, :n]
+        out = out[:, :n]
+
+        if exists(lead_dims):
+            out = out.reshape(*orig_shape)
+
+        return out
 
 class AxialAttention(nn.Module):
     def __init__(
@@ -248,7 +278,7 @@ class SequentialSequence(nn.Module):
         super().__init__()
         self.blocks = blocks
 
-    def forward(self, x, m, mask = None,  msa_mask = None, **kwargs):
+    def forward(self, x, m, mask = None,  msa_mask = None, msa_lead_dims = None, **kwargs):
         for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
 
             # self attention
@@ -256,7 +286,7 @@ class SequentialSequence(nn.Module):
             x = attn(x, mask = mask) + x
 
             if exists(m):
-                m = msa_attn(m, mask = msa_mask) + m
+                m = msa_attn(m, mask = msa_mask, lead_dims = msa_lead_dims) + m
 
                 # cross attention
 
@@ -289,6 +319,7 @@ class Alphafold2(nn.Module):
         reversible = False,
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
+        inter_msa_self_attn = True
     ):
         super().__init__()
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
@@ -339,6 +370,10 @@ class Alphafold2(nn.Module):
 
         trunk_class = SequentialSequence if not reversible else ReversibleSequence
         self.net = trunk_class(layers)
+
+        # attention configs
+
+        self.inter_msa_self_attn = inter_msa_self_attn # whether for the MSA self attention to span across all the MSAs
 
         # to output
 
@@ -393,9 +428,15 @@ class Alphafold2(nn.Module):
         if exists(msa_mask):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
 
+        # specify msa self attn
+
+        msa_lead_dims = None
+        if exists(msa):
+            msa_lead_dims = msa_shape[:3] if not self.inter_msa_self_attn else m.shape[:2]
+
         # trunk
 
-        x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask)
+        x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask, msa_lead_dims = msa_lead_dims)
 
         # structural refinement
 
