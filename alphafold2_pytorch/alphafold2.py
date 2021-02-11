@@ -118,13 +118,12 @@ class Attention(nn.Module):
 
                 if exists(context_mask):
                     context_mask = F.pad(context_mask, (0, padding), value = False)
+                    context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
+                    context_mask = context_mask > 0
 
                 k, v = map(lambda t: rearrange(t, 'b n c -> b c n'), (k, v))
                 k, v = map(self.compress_fn, (k, v))
                 k, v = map(lambda t: rearrange(t, 'b c n -> b n c'), (k, v))
-
-                context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
-                context_mask = context_mask > 0
 
                 j = (j + padding) // ratio
 
@@ -212,7 +211,8 @@ class AxialAttention(nn.Module):
         w = h = int(sqrt(n))
 
         x = x.reshape(b, h, w, d)
-        mask = mask.reshape(b, h, w)
+        if exists(mask):
+            mask = mask.reshape(b, h, w)
 
         w_mask = h_mask = w_context = h_context = w_context_mask = h_context_mask = None
 
@@ -344,7 +344,7 @@ class Alphafold2(nn.Module):
             nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
         )
 
-    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
+    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None, ss_only = False):
         n, device = seq.shape[1], seq.device
 
         # unpack (AA_code, atom_pos)
@@ -363,12 +363,12 @@ class Alphafold2(nn.Module):
         ax2 = x + self.pos_emb_ax(seq_range)[None, ...]
 
         # outer sum
-
+        x_mask = None
         x = rearrange(ax1, 'b i d -> b i () d') + rearrange(ax2, 'b j d-> b () j d') # create pair-wise residue embeds
-        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j')
-
         x = rearrange(x, 'b i j d -> b (i j) d')
-        x_mask = rearrange(x_mask, 'b i j -> b (i j)')
+        if exists(mask):
+            x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j')
+            x_mask = rearrange(x_mask, 'b i j -> b (i j)')
 
         # embed multiple sequence alignment
 
@@ -393,7 +393,8 @@ class Alphafold2(nn.Module):
         # trunk
 
         x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask)
-
+        if (ss_only):
+            return x, m, n
         # structural refinement
 
         ### TODO - use SE3Transformer here, as details emerge about the iterative refinement, fill-in here
@@ -402,4 +403,4 @@ class Alphafold2(nn.Module):
 
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        return self.to_distogram_logits(x), x, m # NOTE for experiments, currently x is the out of self.net()
+        return self.to_distogram_logits(x)
