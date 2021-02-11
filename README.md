@@ -74,6 +74,7 @@ model = Alphafold2(
     depth = 12,
     heads = 8,
     dim_head = 64,
+    max_seq_len = 2048,                   # the maximum sequence length, this is required for sparse attention. the input cannot exceed what is set here
     sparse_self_attn = (True, False) * 6  # interleave sparse and full attention for all 12 layers
 ).cuda()
 ```
