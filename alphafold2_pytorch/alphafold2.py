@@ -123,8 +123,9 @@ class Attention(nn.Module):
                 k, v = map(self.compress_fn, (k, v))
                 k, v = map(lambda t: rearrange(t, 'b c n -> b n c'), (k, v))
 
-                context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
-                context_mask = context_mask > 0
+                if exists(context_mask):
+                    context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
+                    context_mask = context_mask > 0
 
                 j = (j + padding) // ratio
 
@@ -212,7 +213,7 @@ class AxialAttention(nn.Module):
         w = h = int(sqrt(n))
 
         x = x.reshape(b, h, w, d)
-        mask = mask.reshape(b, h, w)
+        mask = mask.reshape(b, h, w) if exists(mask) else None
 
         w_mask = h_mask = w_context = h_context = w_context_mask = h_context_mask = None
 
@@ -365,10 +366,10 @@ class Alphafold2(nn.Module):
         # outer sum
 
         x = rearrange(ax1, 'b i d -> b i () d') + rearrange(ax2, 'b j d-> b () j d') # create pair-wise residue embeds
-        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j')
+        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j') if exists(mask) else None
 
         x = rearrange(x, 'b i j d -> b (i j) d')
-        x_mask = rearrange(x_mask, 'b i j -> b (i j)')
+        x_mask = rearrange(x_mask, 'b i j -> b (i j)') if exists(mask) else None
 
         # embed multiple sequence alignment
 
