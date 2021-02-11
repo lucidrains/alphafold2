@@ -179,7 +179,7 @@ class SparseAttention(Attention):
         if remainder > 0:
             padding = self.block_size - remainder
             x = F.pad(x, (0, 0, 0, padding), value = 0)
-            mask = F.pad(mask, (0, padding), value = False)
+            mask = F.pad(mask, (0, padding), value = False) if exists(mask) else None
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
