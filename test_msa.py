@@ -11,7 +11,7 @@ from einops import rearrange, repeat, reduce
 
 from torch.utils.data import Dataset
 
-from alphafold2_pytorch import Alphafold2, Attention
+from alphafold2_pytorch import Alphafold2, exists
 
 # n: 20171106 : changed-to: '.' = 0
 AA = {
@@ -55,6 +55,7 @@ MAX_NUM_MSA = 8192
 BATCH_SIZE = 1
 NUM_SS_CLASS = 3
 DISTANCE_BINS = 37
+GET_ALL = False
 
 
 def cycle(loader, cond=lambda x: True):
@@ -106,9 +107,18 @@ class SampleHackDataset(Dataset):
     def query(self, *args):
         return self.meta.query(*args)
 
-class SelfAttention(nn.Module):
-    def __init__(self):
+
+class SSModule(nn.Module):
+    def __init__(self, num_q, dim):
         super().__init__()
+
+        self.net = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, out_features=num_q))
+
+    def forward(self, x, m, n):
+        # x = rearrange(x, 'b (h w) d -> b h w d', h = n)
+        # x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5
+        # x_o = torch.narrow(x, 3, 0, 1)
+        return self.net(x)
 
 
 class SSWrapper(nn.Module):
@@ -117,24 +127,34 @@ class SSWrapper(nn.Module):
     """
     def __init__(self, num_q, **kwargs):
         super().__init__()
-        dim = kwargs.pop('dim', None)
         self.af2 = Alphafold2(**kwargs)
-        self.to_secondary_structure = Attention()
+        dim = kwargs.get('dim', None)
+        self.to_secondary_structure = SSModule(num_q, dim)
+
+    def forward(self, **kwargs):
+        x, m, n = self.af2(**kwargs)
+        return self.to_secondary_structure(x, m, n)
+
+
+def rand_choice(orginal_size: int, target_size: int, container):
+    idxs = np.random.choice(orginal_size, target_size)
+    container.extend(idxs)
+    return idxs
 
 
 def test(root: str):
     root = Path(root)
     device = torch.device('cuda:0')
-    ds = SampleHackDataset(root / "meta.csv", root / "msa", root / "seq", root / "sst")
+    ds = SampleHackDataset(root / "sample.csv", root / "msa", root / "seq", root / "sst")
     model = SSWrapper(
         num_q=3,
         dim=256,
-        depth=6,
-        max_seq_len=MAX_SEQ_LEN,
-        embedding_size=EMBEDDING_SIZE,
-        max_msa_depth=MAX_NUM_MSA,
+        depth=12,
         heads=8,
-        dim_head=64
+        dim_head=64,
+        # sparse_self_attn = (True, False) * 3,
+        cross_attn_compress_ratio=3,
+        reversible=True,
     ).cuda()
 
     optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -149,7 +169,7 @@ def test(root: str):
     b = BATCH_SIZE
     gradient_counter = 0
 
-    def accumulated_enought(acc_size, curr):
+    def accumulated_enough(acc_size, curr):
         if curr >= acc_size:
             return True
         return False
@@ -171,63 +191,89 @@ def test(root: str):
         # msa = pad(msa, MAX_SEQ_LEN, b, seq_len, msa_depth=msa_depth)
         # sst = pad(sst, MAX_SEQ_LEN, b, seq_len)
 
-        l = 96
+        idxs = []
+        l = 128
         k = np.math.ceil(seq_len / l)
         r_k = k * l - seq_len
         id_extension_list = [f"{id}_w{ch_i}" for ch_i in range(k)]
         seq = torch.nn.functional.pad(seq, (0, r_k))
         seq = torch.tensor([[chunk for chunk in seq[i * l:(i + 1) * l]] for i in range(k)])
-        d = 8
-        j = np.math.ceil(msa_depth / d)
-        r_j = d * j - msa_depth
-        msa = torch.nn.functional.pad(msa, (0, r_k, 0, r_j))
+        d = 20
+        # if GET_ALL:
+        #     j = np.math.ceil(msa_depth / d)
+        #     r_j = d * j - msa_depth
+        #     msa = torch.nn.functional.pad(msa, (0, r_k, 0, r_j))
+        #     msa = torch.tensor(
+        #         [
+        #             [[[ch for ch in _seq[i * l:(i + 1) * l]] for i in range(k)] for _seq in msa[h * d:(h + 1) * d]]
+        #             for h in range(j)
+        #         ]
+        #     )
+        #     msa = rearrange(msa, 'h d b w -> b h d w')
+        # else:
+        msa = torch.nn.functional.pad(msa, (0, r_k))
         msa = torch.tensor(
-            [[[[ch for ch in _seq[i * l:(i + 1) * l]] for i in range(k)] for _seq in msa[h * d:(h + 1) * d]] for h in range(j)]
+            [
+                [[chunk for chunk in _seq[i * l:(i + 1) * l]] for _seq in msa[rand_choice(msa_depth, d, idxs)]]
+                for i in range(k)
+            ]
         )
-        msa = rearrange(msa, 'h d b w -> b h d w')
         sst = torch.nn.functional.pad(sst, (0, r_k), value=-1)
         sst = torch.tensor([[chunk for chunk in sst[i * l:(i + 1) * l]] for i in range(k)])
         print(f"padded: seq {seq.shape} msa {msa.shape} sst {sst.shape}")
         # seq = rearrange(seq, 'b (limit chunk) -> (b chunk) limit', b = 1, limit = MAX_SEQ_LEN) # group result
         # msa = rearrange(msa, 'b (l_w w) (l_h h) -> (l_h b) (l_w b) h w', l_w = MAX_SEQ_LEN, l_h=MAX_NUM_MSA)
         # sst = rearrange(sst, 'b (l c) -> (b c) l', b = 1, l = MAX_SEQ_LEN)
-        i, j = 0, 0
+        tloss = 0
+        for i in range(k):
+            n_seq, n_msa, cut_off = reshape_input(seq, msa, sst, i)
+            ss, ss_t = reshape_output(model, sst, i, n_seq, n_msa, cut_off)
+            loss = lossFn(ss, ss_t)
+            tloss += loss
+            
+        write_loss(writer, global_counter, id, tloss)
+        tloss.backward()
+        global_counter += 1
+        
+        if accumulated_enough(GRADIENT_ACCUMULATE_EVERY, gradient_counter):
+            gradient_counter = 0
+            optim.step()
+            optim.zero_grad()
 
-        for b in msa:
-            for h in b:
-                n_seq = rearrange(seq[i], 'l -> () l').cuda()
-                n_msa = rearrange(h, 'd h -> () d h').cuda()
+            # else:
+            #     for h in b:
+            #         n_seq = rearrange(seq[i], 'l -> () l').cuda()
+            #         n_msa = rearrange(h, 'd h -> () d h').cuda()
 
-                valid = sst[i][:] != -1
-                cut_off = None
-                for z in range(len(valid)):
-                    if valid[z]:
-                        cut_off = z
+            #         valid = sst[i][:] != -1
+            #         cut_off = None
+            #         for z in range(len(valid)):
+            #             if valid[z]:
+            #                 cut_off = z
 
-                ss = model(seq=n_seq, w_pos=i * l, msa=n_msa, h_pos=j * d)
+            #         ss = model(seq=n_seq, msa=n_msa)
 
-                ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS).cpu()
-                ss = rearrange(ss, 'b c n -> n b c')
-                ss = ss[:cut_off, ...]
-                ss = rearrange(ss, 'n b c -> b c n')
-                ss_t = sst[i][:cut_off]
-                ss_t = rearrange(ss_t, 'l -> () l')
+            #         ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS).cpu()
+            #         ss = rearrange(ss, 'b c n -> n b c')
+            #         ss = ss[:cut_off, ...]
+            #         ss = rearrange(ss, 'n b c -> b c n')
+            #         ss_t = sst[i][:cut_off]
+            #         ss_t = rearrange(ss_t, 'l -> () l')
 
-                loss = lossFn(ss, ss_t)
-                gradient_counter += 1
-                writer.add_scalar(
-                    f"Loss/train per {GRADIENT_ACCUMULATE_EVERY} miniblocks in collated samples", loss, global_counter
-                )
-                global_counter += 1
+            #         loss = lossFn(ss, ss_t)
+            #         gradient_counter += 1
+            #         writer.add_scalar(f"Loss (rand msa seq selection)", loss, global_step=global_counter)
+            #         writer.add_text("Data id", f"{id_extension_list[i]}", global_step=global_counter)
+            #         global_counter += 1
 
-                loss.backward()
-                if accumulated_enought(GRADIENT_ACCUMULATE_EVERY, gradient_counter):
-                    gradient_counter = 0
-                    optim.step()
-                    optim.zero_grad()
+            #         loss.backward()
+            #         if accumulated_enough(GRADIENT_ACCUMULATE_EVERY, gradient_counter):
+            #             gradient_counter = 0
+            #             optim.step()
+            #             optim.zero_grad()
 
-                j += 1
-            i += 1
+            #         j += 1
+
             # optim.step()
             # optim.zero_grad()
         # ss = model(seq=seq, msa=msa)
@@ -247,6 +293,31 @@ def test(root: str):
         # writer.flush()
     writer.close()
 
+def write_loss(writer, global_counter, id, tloss):
+    writer.add_scalar(f"Loss v0.2", tloss, global_step=global_counter)
+    writer.add_text("Data id", f"{id}", global_step=global_counter)
+
+
+def reshape_output(model, sst, i, n_seq, n_msa, cut_off):
+    ss = model(seq=n_seq, msa=n_msa, ss_only=True)
+    ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS).cpu()
+    ss = rearrange(ss, 'b c n -> n b c')
+    ss = ss[:cut_off, ...]
+    ss = rearrange(ss, 'n b c -> b c n')
+    ss_t = sst[i][:cut_off]
+    ss_t = rearrange(ss_t, 'l -> () l')
+    return ss,ss_t
+
+def reshape_input(seq, msa, sst, i):
+    n_seq = rearrange(seq[i], 'l -> () l').cuda()
+    n_msa = rearrange(msa[i], 's w -> () s w').cuda()
+    valid = sst[i][:] != -1
+    cut_off = None
+    for z in range(len(valid)):
+        if valid[z]:
+            cut_off = z
+    return n_seq,n_msa,cut_off
+
 
 if __name__ == '__main__':
-    test()
+    test('./experiment/sample_msa')
