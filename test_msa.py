@@ -1,4 +1,5 @@
 
+from alphafold2_pytorch.alphafold2 import Attention
 from pathlib import Path
 
 import numpy as np
@@ -105,6 +106,28 @@ class SampleHackDataset(Dataset):
     def query(self, *args):
         return self.meta.query(*args)
 
+
+class SecondaryAttention(Attention):
+    def __init__(
+        self,
+        *args,
+        in_dim,
+        out_dim = 3,
+        heads = 8,
+        dim_head = 8,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        inner_dim = dim_head * heads
+
+        self.to_q = nn.Linear(in_dim, inner_dim, bias =False)
+        self.to_kv = nn.Linear(in_dim, inner_dim * 2, bias = False)
+        self.to_out = nn.Linear(inner_dim, out_dim)
+
+    def forward(self, x, mask = None):
+        device, h, x_shape = x.device, self.heads, x.shape
+        
+        q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
 
 class SSModule(nn.Module):
     def __init__(self, num_q, dim):

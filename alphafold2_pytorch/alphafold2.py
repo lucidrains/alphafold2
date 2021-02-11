@@ -438,7 +438,7 @@ class Alphafold2(nn.Module):
         x, m = self.net(x, m, mask = x_mask, msa_mask = msa_mask, msa_lead_dims = msa_lead_dims)
 
         if (ss_only):
-            return x, m
+            return x, m, n
 
         # structural refinement
 
