@@ -174,13 +174,15 @@ class SparseAttention(Attention):
 
     def forward(self, x, mask = None):
         device, h = x.device, self.heads
-        n = x.shape[1]
+        b, n = x.shape[:2]
+        assert n <= self.seq_len, f'either the AA sequence length {n} or the total MSA length {n} exceeds the allowable sequence length {self.seq_len} for sparse attention, set by `max_seq_len`'
 
         remainder = x.shape[1] % self.block_size
 
         if remainder > 0:
             padding = self.block_size - remainder
             x = F.pad(x, (0, 0, 0, padding), value = 0)
+            mask = torch.ones(b, n, device = device).bool()
             mask = F.pad(mask, (0, padding), value = False)
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
