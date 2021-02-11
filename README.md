@@ -74,6 +74,7 @@ model = Alphafold2(
     depth = 12,
     heads = 8,
     dim_head = 64,
+    max_seq_len = 2048,                   # the maximum sequence length, this is required for sparse attention. the input cannot exceed what is set here
     sparse_self_attn = (True, False) * 6  # interleave sparse and full attention for all 12 layers
 ).cuda()
 ```
@@ -98,6 +99,20 @@ There are two equivariant self attention libraries that I have prepared for the 
 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
+
+## Miscellaneous Settings
+
+Below are some miscellaneous settings for cutting down on attention
+
+```python
+model = Alphafold2(
+    dim = 256,
+    depth = 12,
+    heads = 8,
+    dim_head = 64,
+    inter_msa_self_attn = False   # turns off self-attention across MSA. each MSA will only attend internally
+).cuda()
+```
 
 ## Testing
 

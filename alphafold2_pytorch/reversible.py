@@ -65,7 +65,7 @@ class ReversibleSelfAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)        
 
-    def forward(self, x, m, mask = None, msa_mask = None, _reverse = True):
+    def forward(self, x, m, mask = None, msa_mask = None, msa_lead_dims = None, _reverse = True):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -76,12 +76,12 @@ class ReversibleSelfAttnBlock(nn.Module):
         with context():
             y1 = x1 + self.f(x2, record_rng = record_rng, mask = mask)
             y2 = x2 + self.g(y1, record_rng = record_rng)
-            n1 = m1 + self.j(m2, record_rng = record_rng, mask = msa_mask)
+            n1 = m1 + self.j(m2, record_rng = record_rng, mask = msa_mask, lead_dims = msa_lead_dims)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, msa_lead_dims = None):
         y1, y2 = torch.chunk(y, 2, dim = 2)
         del y
 
@@ -164,7 +164,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)
 
-    def forward(self, x, m, mask = None, msa_mask = None, _reverse = True):
+    def forward(self, x, m, mask = None, msa_mask = None, msa_lead_dims = None, _reverse = True):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -180,7 +180,7 @@ class ReversibleCrossAttnBlock(nn.Module):
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, msa_lead_dims = None):
         n1, n2 = torch.chunk(n, 2, dim = 2)
         del n
 
@@ -311,12 +311,12 @@ class ReversibleSequence(nn.Module):
 
         self.blocks = blocks
 
-    def forward(self, seq, msa, mask = None, msa_mask = None, reverse = True):
+    def forward(self, seq, msa, mask = None, msa_mask = None, msa_lead_dims = None, reverse = True):
         assert exists(msa), 'reversibility does not work with no MSA sequences yet'
         
         blocks = self.blocks
         seq, msa = list(map(lambda t: torch.cat((t, t), dim = -1), (seq, msa)))
-        kwargs = {'mask': mask, 'msa_mask': msa_mask}
+        kwargs = {'mask': mask, 'msa_mask': msa_mask, 'msa_lead_dims': msa_lead_dims}
 
         fn = reversible_apply if reverse else irreversible_apply
         ind = seq.shape[1]
