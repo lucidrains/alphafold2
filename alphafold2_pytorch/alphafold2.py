@@ -103,12 +103,10 @@ class Attention(nn.Module):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
         if exists(lead_dims):
-            x = x.reshape(*lead_dims, -1)
-            x = x.reshape(-1, *x.shape[-2:])
+            x = rearrange(x, 'b (m n) d -> (b m) n d', m = lead_dims[1])
 
             if exists(mask):
-                mask = mask.view(*lead_dims)
-                mask = mask.reshape(-1, *mask.shape[-1:])
+                mask = rearrange(mask, 'b (m n) -> (b m) n', m = lead_dims[1])
 
         context = default(context, x)
 
@@ -192,12 +190,10 @@ class SparseAttention(Attention):
         # for only restricting to intra MSA attention
 
         if exists(lead_dims):
-            x = x.reshape(*lead_dims, -1)
-            x = x.reshape(-1, *x.shape[-2:])
+            x = rearrange(x, 'b (m n) d -> (b m) n d', m = lead_dims[1])
 
             if exists(mask):
-                mask = mask.view(*lead_dims)
-                mask = mask.reshape(-1, *mask.shape[-1:])
+                mask = rearrange(mask, 'b (m n) -> (b m) n', m = lead_dims[1])
 
         b, n, _ = x.shape
         assert n <= self.seq_len, f'either the AA sequence length {n} or the total MSA length {n} exceeds the allowable sequence length {self.seq_len} for sparse attention, set by `max_seq_len`'
