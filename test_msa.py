@@ -1,17 +1,15 @@
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn, einsum
-from inspect import isfunction
-from functools import partial
-import torch.nn.functional as F
-from einops import rearrange, repeat, reduce
 
+from einops import rearrange
+from torch import nn
 from torch.utils.data import Dataset
 
-from alphafold2_pytorch import Alphafold2, exists
+from alphafold2_pytorch import Alphafold2
 
 # n: 20171106 : changed-to: '.' = 0
 AA = {
@@ -152,7 +150,7 @@ def test(root: str):
         depth=12,
         heads=8,
         dim_head=64,
-        # sparse_self_attn = (True, False) * 3,
+        sparse_self_attn = (True, False) * 3,
         cross_attn_compress_ratio=3,
         reversible=True,
     ).cuda()
@@ -192,13 +190,13 @@ def test(root: str):
         # sst = pad(sst, MAX_SEQ_LEN, b, seq_len)
 
         idxs = []
-        l = 128
+        l = 64
         k = np.math.ceil(seq_len / l)
         r_k = k * l - seq_len
         id_extension_list = [f"{id}_w{ch_i}" for ch_i in range(k)]
         seq = torch.nn.functional.pad(seq, (0, r_k))
         seq = torch.tensor([[chunk for chunk in seq[i * l:(i + 1) * l]] for i in range(k)])
-        d = 20
+        d = 4
         # if GET_ALL:
         #     j = np.math.ceil(msa_depth / d)
         #     r_j = d * j - msa_depth
