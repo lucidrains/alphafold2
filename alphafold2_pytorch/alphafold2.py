@@ -125,8 +125,6 @@ class Attention(nn.Module):
 
                 if exists(context_mask):
                     context_mask = F.pad(context_mask, (0, padding), value = False)
-                    context_mask = reduce(context_mask.float(), 'b (n r) -> b n', 'sum', r = ratio)
-                    context_mask = context_mask > 0
 
                 k, v = map(lambda t: rearrange(t, 'b n c -> b c n'), (k, v))
                 k, v = map(self.compress_fn, (k, v))
