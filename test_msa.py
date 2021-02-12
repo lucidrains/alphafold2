@@ -46,15 +46,7 @@ AA = {
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-5
-IGNORE_INDEX = -100
-THRESHOLD_LENGTH = 250
-EMBEDDING_SIZE = np.max(list(AA.values())) + 1  # 22
-MAX_SEQ_LEN = 2048
-MAX_NUM_MSA = 8192
-BATCH_SIZE = 1
 NUM_SS_CLASS = 3
-DISTANCE_BINS = 37
-GET_ALL = False
 
 
 def cycle(loader, cond=lambda x: True):
@@ -216,7 +208,6 @@ def test(root: str):
 
     step = 0
     global_counter = 0
-    b = BATCH_SIZE
     gradient_counter = 0
 
     def accumulated_enough(acc_size, curr):
@@ -249,18 +240,6 @@ def test(root: str):
         seq = torch.nn.functional.pad(seq, (0, r_k))
         seq = torch.tensor([[chunk for chunk in seq[i * l:(i + 1) * l]] for i in range(k)])
         d = 8
-        # if GET_ALL:
-        #     j = np.math.ceil(msa_depth / d)
-        #     r_j = d * j - msa_depth
-        #     msa = torch.nn.functional.pad(msa, (0, r_k, 0, r_j))
-        #     msa = torch.tensor(
-        #         [
-        #             [[[ch for ch in _seq[i * l:(i + 1) * l]] for i in range(k)] for _seq in msa[h * d:(h + 1) * d]]
-        #             for h in range(j)
-        #         ]
-        #     )
-        #     msa = rearrange(msa, 'h d b w -> b h d w')
-        # else:
         msa = torch.nn.functional.pad(msa, (0, r_k))
         msa = torch.tensor(
             [
@@ -290,58 +269,6 @@ def test(root: str):
             optim.step()
             optim.zero_grad()
 
-            # else:
-            #     for h in b:
-            #         n_seq = rearrange(seq[i], 'l -> () l').cuda()
-            #         n_msa = rearrange(h, 'd h -> () d h').cuda()
-
-            #         valid = sst[i][:] != -1
-            #         cut_off = None
-            #         for z in range(len(valid)):
-            #             if valid[z]:
-            #                 cut_off = z
-
-            #         ss = model(seq=n_seq, msa=n_msa)
-
-            #         ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS).cpu()
-            #         ss = rearrange(ss, 'b c n -> n b c')
-            #         ss = ss[:cut_off, ...]
-            #         ss = rearrange(ss, 'n b c -> b c n')
-            #         ss_t = sst[i][:cut_off]
-            #         ss_t = rearrange(ss_t, 'l -> () l')
-
-            #         loss = lossFn(ss, ss_t)
-            #         gradient_counter += 1
-            #         writer.add_scalar(f"Loss (rand msa seq selection)", loss, global_step=global_counter)
-            #         writer.add_text("Data id", f"{id_extension_list[i]}", global_step=global_counter)
-            #         global_counter += 1
-
-            #         loss.backward()
-            #         if accumulated_enough(GRADIENT_ACCUMULATE_EVERY, gradient_counter):
-            #             gradient_counter = 0
-            #             optim.step()
-            #             optim.zero_grad()
-
-            #         j += 1
-
-            # optim.step()
-            # optim.zero_grad()
-        # ss = model(seq=seq, msa=msa)
-
-        # # print(f"model result: {ss.dtype} {ss.shape}")
-
-        # ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS)
-        # loss = lossFn(ss, sst)
-        # writer.add_scalar("Loss/train - per sequence", loss, step)
-        # loss.backward()
-
-        # del id, seq_len, msa_depth, seq, msa, sst
-
-        # optim.step()
-        # optim.zero_grad()
-
-        # writer.flush()
-    writer.close()
 
 def write_loss(writer, global_counter, id, tloss):
     writer.add_scalar(f"Loss v0.2", tloss, global_step=global_counter)
