@@ -119,6 +119,20 @@ model = Alphafold2(
 ```bash
 $ python setup.py test
 ```
+## Experiments
+### Ab Initio SSP (secondary structure prediction only on primary sequence + MSA)
+run 
+```bash
+cd experiment && sh download_sample_msa.sh
+tar xf sample.tgz && rm sample.tgz
+```
+You will see a crude dataset in folder `sample_msa` under `experiment` of 1197 proteins with `seq`, `msa` and `sst` in their respective folders. `sample.csv` describes their length and depth.
+
+Running
+```bash
+python test_msa.py
+```
+will start the training. Beware! work in progress, might contain bugs
 
 ## Data
 
