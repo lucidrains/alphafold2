@@ -1,5 +1,5 @@
 
-from alphafold2_pytorch.alphafold2 import Attention
+from alphafold2_pytorch.alphafold2 import Attention, exists, partial, PreNorm, FeedForward
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 
 from einops import rearrange
-from torch import nn
+from torch import nn, einsum
 from torch.utils.data import Dataset
 
 from alphafold2_pytorch import Alphafold2
@@ -107,54 +107,83 @@ class SampleHackDataset(Dataset):
         return self.meta.query(*args)
 
 
-class SecondaryAttention(Attention):
+class SecondaryAttention(nn.Module):
     def __init__(
         self,
-        *args,
         in_dim,
-        out_dim = 3,
+        out_dim,
         heads = 8,
         dim_head = 8,
-        **kwargs,
+        ff_dropout = 0.,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__()
         inner_dim = dim_head * heads
-
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+        self.dropout = nn.Dropout(ff_dropout)
         self.to_q = nn.Linear(in_dim, inner_dim, bias =False)
         self.to_kv = nn.Linear(in_dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, out_dim)
-
-    def forward(self, x, mask = None):
-        device, h, x_shape = x.device, self.heads, x.shape
-        
+        self.norm = nn.LayerNorm(in_dim)
+    def forward(self, x):
+        device, orig_shape, h = x.device, x.shape, self.heads
+        x = self.norm(x)
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+        
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        
+        attn = dots.softmax(dim = -1)
+        attn = self.dropout(attn)
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
 
 class SSModule(nn.Module):
-    def __init__(self, num_q, dim):
+    def __init__(self, num_class, **kwargs):
         super().__init__()
+        ff_dropout = kwargs.get('ff_dropout', 0.)
+        prenorm_256 = partial(PreNorm, 256)
+        prenorm_64 = partial(PreNorm, 64)
+        prenorm_8 = partial(PreNorm, 8)
 
-        self.net = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, out_features=num_q))
+        self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, ff_dropout=ff_dropout)
+        self.ff1 = FeedForward(dim=64, dropout = ff_dropout)
+        self.q2 = SecondaryAttention(in_dim=64, out_dim=8, heads=4, dim_head=2, ff_dropout=ff_dropout)
+        self.ff2 = FeedForward(dim=8, dropout= ff_dropout)
 
-    def forward(self, x, m, n):
-        # x = rearrange(x, 'b (h w) d -> b h w d', h = n)
-        # x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5
-        # x_o = torch.narrow(x, 3, 0, 1)
-        return self.net(x)
+        self.out = nn.Sequential(nn.LayerNorm(8), nn.Linear(8, num_class))
+        
+
+    def forward(self, x):
+        # print(f'pre_ssp_forward: x.shape -> {x.shape}')
+        x = self.q1(x)
+        # print(f'post_ssp_q1: x.shape -> {x.shape}')
+        x = self.ff1(x)
+        # print(f'post_ssp_ff1: x.shape -> {x.shape}')
+        x = self.q2(x)
+        # print(f'post_ssp_q2: x.shape -> {x.shape}')
+        x = self.ff2(x)
+        # print(f'post_ssp_ff1: x.shape -> {x.shape}')
+        x = self.out(x)
+        # print(f'post_ssp_out: x.shape -> {x.shape}')
+        return x
 
 
 class SSWrapper(nn.Module):
     """due to the nature of available msa->sst training data, forward need to handle per amino acid position logic
     thus we create a wrapper largely duplicate alphafold2's forward but with modification
     """
-    def __init__(self, num_q, **kwargs):
+    def __init__(self, num_class, **kwargs):
         super().__init__()
         self.af2 = Alphafold2(**kwargs)
-        dim = kwargs.get('dim', None)
-        self.to_secondary_structure = SSModule(num_q, dim)
+        self.ssp = SSModule(num_class, **kwargs)
 
     def forward(self, **kwargs):
-        x, m, n = self.af2(**kwargs)
-        return self.to_secondary_structure(x, m, n)
+        x,*_ = self.af2(**kwargs)
+        # print(f'post_af2: x.shape -> {x.shape}')
+        return self.ssp(x)
 
 
 def rand_choice(orginal_size: int, target_size: int, container):
@@ -168,7 +197,7 @@ def test(root: str):
     device = torch.device('cuda:0')
     ds = SampleHackDataset(root / "sample.csv", root / "msa", root / "seq", root / "sst")
     model = SSWrapper(
-        num_q=3,
+        num_class=3,
         dim=256,
         depth=12,
         heads=8,
@@ -213,7 +242,7 @@ def test(root: str):
         # sst = pad(sst, MAX_SEQ_LEN, b, seq_len)
 
         idxs = []
-        l = 256
+        l = 64
         k = np.math.ceil(seq_len / l)
         r_k = k * l - seq_len
         id_extension_list = [f"{id}_w{ch_i}" for ch_i in range(k)]
@@ -321,12 +350,12 @@ def write_loss(writer, global_counter, id, tloss):
 
 def reshape_output(model, sst, i, n_seq, n_msa, cut_off):
     ss = model(seq=n_seq, msa=n_msa, ss_only=True)
-    ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS).cpu()
+    ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS)
     ss = rearrange(ss, 'b c n -> n b c')
     ss = ss[:cut_off, ...]
     ss = rearrange(ss, 'n b c -> b c n')
     ss_t = sst[i][:cut_off]
-    ss_t = rearrange(ss_t, 'l -> () l')
+    ss_t = rearrange(ss_t, 'l -> () l').cuda()
     return ss,ss_t
 
 def reshape_input(seq, msa, sst, i):
