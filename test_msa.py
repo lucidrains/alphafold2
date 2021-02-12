@@ -1,5 +1,6 @@
 
 from alphafold2_pytorch.alphafold2 import Attention, exists, partial, PreNorm, FeedForward
+from alphafold2_pytorch import constants
 from pathlib import Path
 
 import numpy as np
@@ -194,6 +195,7 @@ def test(root: str):
         depth=12,
         heads=8,
         dim_head=64,
+        num_tokens = constants.NUM_AMINO_ACIDS_EXP,
         sparse_self_attn = (True, False) * 3,
         cross_attn_compress_ratio=3,
         reversible=True,
