@@ -102,6 +102,8 @@ There are two equivariant self attention libraries that I have prepared for the 
 
 ## MSA processing in Trunk
 
+<img src="./images/msa-transformer-diagram.png" width="500px"></img>
+
 A <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">new paper</a> by <a href="https://github.com/rmrao">Roshan Rao</a> proposes using axial attention for pretraining on MSA's. Given the strong results, this repository will use the same scheme in the trunk, specifically for the MSA self-attention.
 
 ## Testing
