@@ -45,28 +45,3 @@ def test_reversible():
 
     distogram.sum().backward()
     assert True
-
-def test_inter_msa_self_attn():
-    model = Alphafold2(
-        dim = 256,
-        depth = 2,
-        heads = 8,
-        dim_head = 64,
-        reversible = True,
-        inter_msa_self_attn = False  # turn off attention across MSA sequences
-    )
-
-    seq = torch.randint(0, 21, (2, 128))
-    msa = torch.randint(0, 21, (2, 5, 64))
-    mask = torch.ones_like(seq).bool()
-    msa_mask = torch.ones_like(msa).bool()
-
-    distogram = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-
-    distogram.sum().backward()
-    assert True

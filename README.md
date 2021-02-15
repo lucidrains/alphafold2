@@ -100,19 +100,9 @@ There are two equivariant self attention libraries that I have prepared for the 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
 
-## Miscellaneous Settings
+## MSA processing in Trunk
 
-Below are some miscellaneous settings for cutting down on attention
-
-```python
-model = Alphafold2(
-    dim = 256,
-    depth = 12,
-    heads = 8,
-    dim_head = 64,
-    inter_msa_self_attn = False   # turns off self-attention across MSA. each MSA will only attend internally
-).cuda()
-```
+A <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">new paper</a> by <a href="https://github.com/rmrao">Roshan Rao</a> proposes using axial attention for pretraining on MSA's. Given the strong results, this repository will use the same scheme in the trunk, specifically for the MSA self-attention.
 
 ## Testing
 
@@ -169,6 +159,17 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
     year    = {2020},
     archivePrefix = {arXiv},
     primaryClass = {q-bio.BM}
+}
+```
+
+```bibtex
+@article{Rao2021.02.12.430858,
+    author  = {Rao, Roshan and Liu, Jason and Verkuil, Robert and Meier, Joshua and Canny, John F. and Abbeel, Pieter and Sercu, Tom and Rives, Alexander},
+    title   = {MSA Transformer},
+    year    = {2021},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/02/13/2021.02.12.430858},
+    journal = {bioRxiv}
 }
 ```
 
