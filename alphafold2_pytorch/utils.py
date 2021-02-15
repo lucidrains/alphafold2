@@ -210,9 +210,9 @@ def nerf_torch(a, b, c, l, theta, chi):
     rotate   = torch.stack([cb, n_plane_, n_plane], dim=-1)
     rotate  /= torch.norm(rotate, dim=-2, keepdim=True)
     # calc proto point, rotate
-    d = torch.stack([torch.cos(theta),
-                     torch.sin(theta) * torch.cos(chi),
-                     torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
+    d = torch.stack([-torch.cos(theta),
+                      torch.sin(theta) * torch.cos(chi),
+                      torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
     # extend base point, set length
     return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
 
