@@ -83,6 +83,7 @@ class Attention(nn.Module):
         dim_head = 64,
         dropout = 0.,
         compress_ratio = 1,
+        tie_attn_dim = None
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -99,20 +100,18 @@ class Attention(nn.Module):
         self.compress_ratio = compress_ratio
         self.compress_fn = nn.Conv1d(inner_dim, inner_dim, compress_ratio, stride = compress_ratio, groups = heads) if compress_ratio > 1 else None
 
-    def forward(self, x, context = None, mask = None, context_mask = None, lead_dims = None):
+        self.tie_attn_dim = tie_attn_dim
+
+    def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
-
-        if exists(lead_dims):
-            x = rearrange(x, 'b (m n) d -> (b m) n d', m = lead_dims[1])
-
-            if exists(mask):
-                mask = rearrange(mask, 'b (m n) -> (b m) n', m = lead_dims[1])
 
         context = default(context, x)
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
 
         i, j = q.shape[-2], k.shape[-2]
+
+        # memory compressed attention, to make cross-attention more efficient
 
         if exists(self.compress_fn):
             assert has_context, 'memory compressed attention only works in the context of cross attention for now'
@@ -138,7 +137,21 @@ class Attention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        # for tying row-attention, for MSA axial self-attention
+
+        if exists(tie_attn_dim):
+            q, k, v = map(lambda t: rearrange(t, '(b r) h n d -> b r h n d', r = tie_attn_dim), (q, k, v))
+
+            # when tying row-attention, one cannot have any masked out tokens
+            if exists(mask):
+                assert torch.all(mask), 'you cannot have any padding if you are to tie the row attention across MSAs'
+                mask = None
+
+            dots = einsum('b r h i d, b r h j d -> b h i j', q, k) * self.scale * (tie_attn_dim ** -0.5)
+        else:
+            dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+
+        # masking
 
         if exists(mask) or exists(context_mask):
             mask = default(mask, lambda: torch.ones(1, i, device = device).bool())
@@ -147,15 +160,23 @@ class Attention(nn.Module):
             mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots.masked_fill_(~mask, mask_value)
 
+        # attention
+
         attn = dots.softmax(dim = -1)
         attn = self.dropout(attn)
 
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        # aggregate
+
+        if exists(tie_attn_dim):
+            out = einsum('b h i j, b r h j d -> b r h i d', attn, v)
+            out = rearrange(out, 'b r h n d -> (b r) h n d')
+        else:
+            out = einsum('b h i j, b h j d -> b h i d', attn, v)
+
+        # combine heads and project out
+
         out = rearrange(out, 'b h n d -> b n (h d)')
         out = self.to_out(out)
-
-        if exists(lead_dims):
-            out = out.reshape(*orig_shape)
 
         return out
 
@@ -217,11 +238,15 @@ class SparseAttention(Attention):
 class AxialAttention(nn.Module):
     def __init__(
         self,
+        tie_row_attn = False,
         sparse_attn = False,
         **kwargs
     ):
         super().__init__()
         attn_class = SparseAttention if sparse_attn else Attention
+
+        self.tie_row_attn = tie_row_attn # tie the row attention, from the paper 'MSA Transformer'
+
         self.attn_width = attn_class(**kwargs)
         self.attn_height = attn_class(**kwargs)
 
@@ -250,8 +275,9 @@ class AxialAttention(nn.Module):
         w_out = self.attn_width(w_x, mask = w_mask, **attn_kwargs)
         w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
+        tie_attn_dim = x.shape[1] if self.tie_row_attn else None
         h_x = rearrange(x, 'b h w d -> (b h) w d')
-        h_out = self.attn_height(h_x, mask = h_mask, **attn_kwargs)
+        h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim, **attn_kwargs)
         h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
         out = w_out + h_out
@@ -313,7 +339,8 @@ class Alphafold2(nn.Module):
         ff_dropout = 0.,
         reversible = False,
         sparse_self_attn = False,
-        cross_attn_compress_ratio = 1
+        cross_attn_compress_ratio = 1,
+        msa_tie_row_attn = False
     ):
         super().__init__()
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
@@ -344,7 +371,7 @@ class Alphafold2(nn.Module):
             layers.append(nn.ModuleList([
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
