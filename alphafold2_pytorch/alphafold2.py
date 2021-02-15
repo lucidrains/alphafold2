@@ -189,8 +189,10 @@ class SparseAttention(Attention):
         **kwargs
     ):
         super().__init__(*args, **kwargs)
+        assert not exists(self.tie_attn_dim), 'sparse attention is not compatible with tying of row attention'
         assert exists(self.seq_len), '`seq_len` must be defined if using sparse attention class'
         from deepspeed.ops.sparse_attention import SparseSelfAttention, VariableSparsityConfig
+
         self.block_size = block_size
         num_random_blocks = default(num_random_blocks, self.seq_len // block_size // 4)
 
