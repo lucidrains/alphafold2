@@ -207,7 +207,7 @@ class SparseAttention(Attention):
             attn_mask_mode = 'add'
         )
 
-    def forward(self, x, mask = None):
+    def forward(self, x, mask = None, tie_attn_dim = None):
         device, orig_shape, h = x.device, x.shape, self.heads
 
         b, n, _ = x.shape
@@ -355,7 +355,7 @@ class Alphafold2(nn.Module):
         # multiple sequence alignment position embedding
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA_EXP, dim)
+        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA, dim)
 
         # custom embedding projection
 

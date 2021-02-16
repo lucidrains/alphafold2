@@ -1,17 +1,16 @@
-from alphafold2_pytorch.alphafold2 import exists, partial, PreNorm, FeedForward
-from alphafold2_pytorch import constants
-import torch.nn.functional as F
 from pathlib import Path
 
+import einops
 import numpy as np
 import pandas as pd
 import torch
-
+import torch.nn.functional as F
 from einops import rearrange
-from torch import nn, einsum
+from torch import einsum, nn
 from torch.utils.data import Dataset
 
-from alphafold2_pytorch import Alphafold2
+from alphafold2_pytorch import Alphafold2, constants
+from alphafold2_pytorch.alphafold2 import FeedForward, PreNorm, exists, partial
 
 # n: 20171106 : changed-to: '.' = 0
 AA = {
@@ -49,11 +48,11 @@ LEARNING_RATE = 3e-5
 NUM_SS_CLASS = 3
 
 from math import ceil
-import torch
-from torch import nn, einsum
-import torch.nn.functional as F
 
+import torch
+import torch.nn.functional as F
 from einops import rearrange, reduce
+from torch import einsum, nn
 
 # helper functions
 
@@ -352,49 +351,96 @@ class SecondaryAttention(NystromAttention):
         return out
 
 
+class SimpleHackAttention(nn.Module):
+    def __init__(self, num_class, in_dim=256, heads=8, head_dim=64, m=256, pinv_iterations=6, eps=1e-8):
+        super().__init__()
+        self.m = m
+        self.heads = heads
+        self.head_dim = head_dim
+        self.pinv_iterations = pinv_iterations
+        self.eps = eps
+        self.num_class = num_class
+        inner_dim = heads * head_dim
+        self.norm = nn.LayerNorm(in_dim)
+        self.to_qkv = nn.Linear(in_dim, inner_dim * 3, bias=False)
+        self.to_out = nn.Linear(inner_dim, num_class)
+
+    def forward(self, x, return_attn=False):
+        b, n, d, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
+
+        # pad so that sequence can be evenly divided into m landmarks
+
+        remainder = n % m
+        if remainder > 0:
+            padding = m - (n % m)
+            x = F.pad(x, (0, 0, 0, padding), value=0)
+
+        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
+
+        q *= self.scale
+        # generate landmarks by sum reduction, and then calculate mean using the mask
+        l = ceil(n / m)
+        landmark_einops_eq = '... (n l) d -> ... n d'
+        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
+        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
+        # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
+        divisor = l
+
+        # mean
+
+        # similarities
+
+        einops_eq = '... i d, ... j d -> ... i j'
+        sim1 = einsum(einops_eq, q, k_landmarks)
+        sim2 = einsum(einops_eq, q_landmarks, k_landmarks)
+        sim3 = einsum(einops_eq, q_landmarks, k)
+        # eq(15) from the paper
+        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
+        attn2_inv = moore_penrose_iter_pinv(attn2, iters)
+        attn = attn1 @ attn2_inv @ attn3
+
+        # aggregate
+        out = einsum('... i j, ... j d -> ... i d', attn, v)
+
+        # merge and combine
+        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
+        out = self.to_out(out)
+        out = out[:, :n]
+
+        return out, attn if return_attn else out
+
+
 class SSModule(nn.Module):
     def __init__(self, num_class, **kwargs):
         super().__init__()
-        ff_dropout = kwargs.get('ff_dropout', 0.)
-        prenorm_256 = partial(PreNorm, 256)
-        prenorm_64 = partial(PreNorm, 64)
-        prenorm_8 = partial(PreNorm, 8)
+        # ff_dropout = kwargs.get('ff_dropout', 0.)
+        # prenorm_256 = partial(PreNorm, 256)
+        # prenorm_64 = partial(PreNorm, 64)
+        # prenorm_8 = partial(PreNorm, 8)
 
-        self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, m=32, ff_dropout=ff_dropout)
-        self.ff1 = FeedForward(dim=64, dropout=ff_dropout)
-        self.q2 = SecondaryAttention(in_dim=64, out_dim=8, heads=4, dim_head=2, ff_dropout=ff_dropout)
-        self.ff2 = FeedForward(dim=8, dropout=ff_dropout)
+        # self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, m=32, ff_dropout=ff_dropout)
+        # self.ff1 = FeedForward(dim=64, dropout=ff_dropout)
+        # self.q2 = SecondaryAttention(in_dim=64, out_dim=8, heads=4, dim_head=2, ff_dropout=ff_dropout)
+        # self.ff2 = FeedForward(dim=8, dropout=ff_dropout)
 
-        self.out = nn.Sequential(nn.LayerNorm(8), nn.Linear(8, num_class))
+        # self.out = nn.Sequential(nn.LayerNorm(8), nn.Linear(8, num_class))
+        self.sha = SimpleHackAttention(num_class, **kwargs)
 
     def forward(self, x):
-        # print(f'pre_ssp_forward: x.shape -> {x.shape}')
-        x = self.q1(x)
-        # print(f'post_ssp_q1: x.shape -> {x.shape}')
-        x = self.ff1(x)
-        # print(f'post_ssp_ff1: x.shape -> {x.shape}')
-        x = self.q2(x)
-        # print(f'post_ssp_q2: x.shape -> {x.shape}')
-        x = self.ff2(x)
-        # print(f'post_ssp_ff1: x.shape -> {x.shape}')
-        x = self.out(x)
-        # print(f'post_ssp_out: x.shape -> {x.shape}')
+        # # print(f'pre_ssp_forward: x.shape -> {x.shape}')
+        # x = self.q1(x)
+        # # print(f'post_ssp_q1: x.shape -> {x.shape}')
+        # x = self.ff1(x)
+        # # print(f'post_ssp_ff1: x.shape -> {x.shape}')
+        # x = self.q2(x)
+        # # print(f'post_ssp_q2: x.shape -> {x.shape}')
+        # x = self.ff2(x)
+        # # print(f'post_ssp_ff1: x.shape -> {x.shape}')
+        # x = self.out(x)
+        # # print(f'post_ssp_out: x.shape -> {x.shape}')
+        x = self.sha(x)
         return x
-
-
-class SSWrapper(nn.Module):
-    """due to the nature of available msa->sst training data, forward need to handle per amino acid position logic
-    thus we create a wrapper largely duplicate alphafold2's forward but with modification
-    """
-    def __init__(self, num_class, **kwargs):
-        super().__init__()
-        self.af2 = Alphafold2(**kwargs)
-        self.ssp = SSModule(num_class, **kwargs)
-
-    def forward(self, **kwargs):
-        x, *_ = self.af2(**kwargs)
-        # print(f'post_af2: x.shape -> {x.shape}')
-        return self.ssp(x)
 
 
 def rand_choice(orginal_size: int, target_size: int, container):
@@ -406,7 +452,7 @@ def rand_choice(orginal_size: int, target_size: int, container):
 def rand_chunk(max_depth, size, container):
     start = np.random.randint(low=0, high=max_depth - size - 1)
     res = range(start, start + size)
-    container.extend(res)
+    container.extend([start])
     return res
 
 
@@ -416,15 +462,15 @@ def test(root: str):
     ds = SampleHackDataset(root / "sample.csv", root / "msa", root / "seq", root / "sst")
     af2 = Alphafold2(
         dim=256,
-        depth=12,
+        depth=6,
         heads=8,
         dim_head=64,
         num_tokens=constants.NUM_AMINO_ACIDS_EXP,
-        sparse_self_attn=(True, False) * 3,
+        sparse_self_attn=True,
         cross_attn_compress_ratio=3,
         reversible=True,
     ).cuda()
-    ssp = SSModule(num_class=NUM_SS_CLASS).cuda()
+    ssp = SSModule(num_class=NUM_SS_CLASS, in_dim=256).cuda()
 
     optim = torch.optim.Adam(list(af2.parameters()) + list(ssp.parameters()), lr=LEARNING_RATE)
     lossFn = nn.CrossEntropyLoss()
@@ -459,22 +505,26 @@ def test(root: str):
         # msa = pad(msa, MAX_SEQ_LEN, b, seq_len, msa_depth=msa_depth)
         # sst = pad(sst, MAX_SEQ_LEN, b, seq_len)
 
-        l = 64
+        l = 128
         k = np.math.ceil(seq_len / l)
         r_k = k * l - seq_len
         id_extension_list = [f"{id}_k{ch_i}" for ch_i in range(k)]
-        seq = torch.nn.functional.pad(seq, (0, r_k))
+        seq = F.pad(seq, (0, r_k))
         seq = torch.tensor([[chunk for chunk in seq[i * l:(i + 1) * l]] for i in range(k)])
-        d = 5
-        msa = torch.nn.functional.pad(msa, (0, r_k))
+        d = 4
+        ml = 64
+        msa = F.pad(msa, (0, r_k))
         msa_row_idxs = []
+        msa_col_idxs = []
         msa = torch.tensor(
             [
-                [[chunk for chunk in _seq[i * l:(i + 1) * l]] for _seq in msa[rand_chunk(msa_depth, d, msa_row_idxs)]]
-                for i in range(k)
+                [
+                    [chunk for chunk in _seq[rand_chunk(l, ml, msa_col_idxs)]]
+                    for _seq in msa[rand_chunk(msa_depth, d, msa_row_idxs)]
+                ] for _ in range(k)
             ]
         )
-        sst = torch.nn.functional.pad(sst, (0, r_k), value=-1)
+        sst = F.pad(sst, (0, r_k), value=-1)
         sst = torch.tensor([[chunk for chunk in sst[i * l:(i + 1) * l]] for i in range(k)])
         print(f"padded: seq {seq.shape} msa {msa.shape} sst {sst.shape}")
         # seq = rearrange(seq, 'b (limit chunk) -> (b chunk) limit', b = 1, limit = MAX_SEQ_LEN) # group result
@@ -483,7 +533,9 @@ def test(root: str):
         tloss = 0
         for i in range(k):
             n_seq, n_msa, cut_off = reshape_input(seq, msa, sst, i)
-            trunk = af2(seq=n_seq, msa=n_msa, ss_only=True, msa_row_pos=msa_row_idxs[i * l:(i + 1) * l], seq_pos=i * l)
+            trunk, *_ = af2(
+                seq=n_seq, msa=n_msa, ss_only=True, msa_col_pos=msa_col_idxs[i], msa_row_pos=msa_row_idxs[i], seq_pos=i * l
+            )
             ss = ssp(trunk)
             ss, ss_t = reshape_output(sst, i, cut_off, ss)
             loss = lossFn(ss, ss_t)
@@ -518,6 +570,7 @@ def reshape_input(seq, msa, sst, i):
     for z in range(len(valid)):
         if valid[z]:
             cut_off = z
+    print(f"pre_forward_shape: seq -> {n_seq.shape}, msa -> {n_msa.shape}")
     return n_seq, n_msa, cut_off
 
 
