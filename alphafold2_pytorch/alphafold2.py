@@ -355,7 +355,7 @@ class Alphafold2(nn.Module):
         # multiple sequence alignment position embedding
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA, dim)
+        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA_EXP, dim)
 
         # custom embedding projection
 
@@ -400,7 +400,7 @@ class Alphafold2(nn.Module):
             nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
         )
 
-    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None, ss_only = False):
+    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None, ss_only = False, msa_row_pos = 0, seq_pos = 0):
         n, device = seq.shape[1], seq.device
 
         # unpack (AA_code, atom_pos)
@@ -414,7 +414,7 @@ class Alphafold2(nn.Module):
 
         # use axial positional embedding
 
-        seq_range = torch.arange(n, device = device)
+        seq_range = torch.arange(start = seq_pos, end = seq_pos + n, device = device)
         ax1 = x + self.pos_emb(seq_range)[None, ...]
         ax2 = x + self.pos_emb_ax(seq_range)[None, ...]
 
@@ -432,8 +432,8 @@ class Alphafold2(nn.Module):
         m = None
         if exists(msa):
             m = self.token_emb(msa)
-            m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
-            m += self.msa_num_pos_emb(torch.arange(msa.shape[1], device = device))[None, :, None, :]
+            m += self.msa_pos_emb(torch.arange(start = seq_pos, end = seq_pos + msa.shape[-1], device = device))[None, None, ...]
+            m += self.msa_num_pos_emb(torch.arange(start = msa_row_pos[0], end = msa_row_pos[0] + msa.shape[1], device = device))[None, :, None, :]
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
@@ -458,7 +458,7 @@ class Alphafold2(nn.Module):
         )
 
         if (ss_only):
-            return x, m, n
+            return x, m, n, seq_pos
 
         # structural refinement
 
