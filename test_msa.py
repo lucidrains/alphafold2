@@ -1,5 +1,4 @@
-
-from alphafold2_pytorch.alphafold2 import Attention, default, exists, partial, PreNorm, FeedForward
+from alphafold2_pytorch.alphafold2 import exists, partial, PreNorm, FeedForward
 from alphafold2_pytorch import constants
 import torch.nn.functional as F
 from pathlib import Path
@@ -58,18 +57,20 @@ from einops import rearrange, reduce
 
 # helper functions
 
+
 def exists(val):
     return val is not None
 
-def moore_penrose_iter_pinv(x, iters = 6):
+
+def moore_penrose_iter_pinv(x, iters=6):
     device = x.device
 
     abs_x = torch.abs(x)
-    col = abs_x.sum(dim = -1)
-    row = abs_x.sum(dim = -2)
+    col = abs_x.sum(dim=-1)
+    row = abs_x.sum(dim=-2)
     z = rearrange(x, '... i j -> ... j i') / (torch.max(col) * torch.max(row))
 
-    I = torch.eye(x.shape[-1], device = device)
+    I = torch.eye(x.shape[-1], device=device)
     I = rearrange(I, 'i j -> () i j')
 
     for _ in range(iters):
@@ -78,20 +79,12 @@ def moore_penrose_iter_pinv(x, iters = 6):
 
     return z
 
+
 # main class
 
+
 class NystromAttention(nn.Module):
-    def __init__(
-        self,
-        in_dim,
-        out_dim,
-        dim_head = 64,
-        heads = 8,
-        m = 256,
-        pinv_iterations = 6,
-        residual = True,
-        eps = 1e-8
-    ):
+    def __init__(self, in_dim, out_dim, dim_head=64, heads=8, m=256, pinv_iterations=6, residual=True, eps=1e-8):
         super().__init__()
         self.eps = eps
         inner_dim = heads * dim_head
@@ -100,15 +93,16 @@ class NystromAttention(nn.Module):
         self.pinv_iterations = pinv_iterations
 
         self.heads = heads
-        self.scale = dim_head ** -0.5
-        self.to_qkv = nn.Linear(in_dim, inner_dim * 3, bias = False)
+        self.scale = dim_head**-0.5
+        self.to_qkv = nn.Linear(in_dim, inner_dim * 3, bias=False)
         self.to_out = nn.Linear(inner_dim, out_dim)
 
         self.residual = residual
         if residual:
-            self.res_conv = nn.Conv2d(heads, heads, 1, groups = heads, bias = False)
+            self.res_conv = nn.Conv2d(heads, heads, 1, groups=heads, bias=False)
 
-    def forward(self, x, mask = None, return_attn = False):
+    def forward(self, x, mask=None, return_attn=False):
+        print(f"pre_forward_Nystrom_input: x-> {x.shape}")
         b, n, _, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
 
         # pad so that sequence can be evenly divided into m landmarks
@@ -116,15 +110,15 @@ class NystromAttention(nn.Module):
         remainder = n % m
         if remainder > 0:
             padding = m - (n % m)
-            x = F.pad(x, (0, 0, 0, padding), value = 0)
+            x = F.pad(x, (0, 0, 0, padding), value=0)
 
             if exists(mask):
-                mask = F.pad(mask, (0, padding), value = False)
+                mask = F.pad(mask, (0, padding), value=False)
 
         # derive query, keys, values
 
-        q, k, v = self.to_qkv(x).chunk(3, dim = -1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
 
         # set masked positions to 0 in queries, keys, values
 
@@ -138,14 +132,14 @@ class NystromAttention(nn.Module):
 
         l = ceil(n / m)
         landmark_einops_eq = '... (n l) d -> ... n d'
-        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l = l)
-        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l = l)
+        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
+        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
 
         # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
 
         divisor = l
         if exists(mask):
-            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l = l)
+            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l=l)
             divisor = mask_landmarks_sum[..., None] + eps
             mask_landmarks = mask_landmarks_sum > 0
 
@@ -171,7 +165,7 @@ class NystromAttention(nn.Module):
 
         # eq (15) in the paper
 
-        attn1, attn2, attn3 = map(lambda t: t.softmax(dim = -1), (sim1, sim2, sim3))
+        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
         attn2_inv = moore_penrose_iter_pinv(attn2, iters)
         attn = attn1 @ attn2_inv @ attn3
 
@@ -186,7 +180,7 @@ class NystromAttention(nn.Module):
 
         # merge and combine heads
 
-        out = rearrange(out, 'b h n d -> b n (h d)', h = h)
+        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
         out = self.to_out(out)
         out = out[:, :n]
 
@@ -194,6 +188,7 @@ class NystromAttention(nn.Module):
             return out, attn
 
         return out
+
 
 def cycle(loader, cond=lambda x: True):
     while True:
@@ -253,19 +248,20 @@ class SecondaryAttention(NystromAttention):
         self,
         in_dim,
         out_dim,
-        dim_head = 64,
-        heads = 8,
-        m = 256,
-        pinv_iterations = 6,
-        residual = True,
-        eps = 1e-8,
+        dim_head=64,
+        heads=8,
+        m=256,
+        pinv_iterations=6,
+        residual=True,
+        eps=1e-8,
         ff_dropout=0.,
     ):
-        super().__init__(in_dim, out_dim, dim_head, heads, m, pinv_iterations, residual, eps)
+        super(SecondaryAttention, self).__init__(in_dim, out_dim, dim_head, heads, m, pinv_iterations, residual, eps)
 
         self.dropout = nn.Dropout(ff_dropout)
         self.in_norm = nn.LayerNorm(in_dim)
-    def forward(self, x, mask = None, return_attn = False):
+
+    def forward(self, x, mask=None, return_attn=False):
         b, n, _, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
 
         x = self.in_norm(x)
@@ -275,16 +271,16 @@ class SecondaryAttention(NystromAttention):
         remainder = n % m
         if remainder > 0:
             padding = m - (n % m)
-            x = F.pad(x, (0, 0, 0, padding), value = 0)
+            x = F.pad(x, (0, 0, 0, padding), value=0)
 
             if exists(mask):
-                mask = F.pad(mask, (0, padding), value = False)
+                mask = F.pad(mask, (0, padding), value=False)
 
         # derive query, keys, values
 
-        q, k, v = self.to_qkv(x).chunk(3, dim = -1)
+        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: self.in_norm(t), (q, k, v))
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
 
         # set masked positions to 0 in queries, keys, values
 
@@ -298,14 +294,14 @@ class SecondaryAttention(NystromAttention):
 
         l = ceil(n / m)
         landmark_einops_eq = '... (n l) d -> ... n d'
-        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l = l)
-        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l = l)
+        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
+        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
 
         # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
 
         divisor = l
         if exists(mask):
-            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l = l)
+            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l=l)
             divisor = mask_landmarks_sum[..., None] + eps
             mask_landmarks = mask_landmarks_sum > 0
 
@@ -331,7 +327,7 @@ class SecondaryAttention(NystromAttention):
 
         # eq (15) in the paper
 
-        attn1, attn2, attn3 = map(lambda t: t.softmax(dim = -1), (sim1, sim2, sim3))
+        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
         attn2_inv = moore_penrose_iter_pinv(attn2, iters)
         attn = attn1 @ attn2_inv @ attn3
 
@@ -346,7 +342,7 @@ class SecondaryAttention(NystromAttention):
 
         # merge and combine heads
 
-        out = rearrange(out, 'b h n d -> b n (h d)', h = h)
+        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
         out = self.to_out(out)
         out = out[:, :n]
 
@@ -354,6 +350,7 @@ class SecondaryAttention(NystromAttention):
             return out, attn
 
         return out
+
 
 class SSModule(nn.Module):
     def __init__(self, num_class, **kwargs):
@@ -363,13 +360,12 @@ class SSModule(nn.Module):
         prenorm_64 = partial(PreNorm, 64)
         prenorm_8 = partial(PreNorm, 8)
 
-        self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, m = 32, ff_dropout=ff_dropout)
-        self.ff1 = FeedForward(dim=64, dropout = ff_dropout)
+        self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, m=32, ff_dropout=ff_dropout)
+        self.ff1 = FeedForward(dim=64, dropout=ff_dropout)
         self.q2 = SecondaryAttention(in_dim=64, out_dim=8, heads=4, dim_head=2, ff_dropout=ff_dropout)
-        self.ff2 = FeedForward(dim=8, dropout= ff_dropout)
+        self.ff2 = FeedForward(dim=8, dropout=ff_dropout)
 
         self.out = nn.Sequential(nn.LayerNorm(8), nn.Linear(8, num_class))
-        
 
     def forward(self, x):
         # print(f'pre_ssp_forward: x.shape -> {x.shape}')
@@ -396,7 +392,7 @@ class SSWrapper(nn.Module):
         self.ssp = SSModule(num_class, **kwargs)
 
     def forward(self, **kwargs):
-        x,*_ = self.af2(**kwargs)
+        x, *_ = self.af2(**kwargs)
         # print(f'post_af2: x.shape -> {x.shape}')
         return self.ssp(x)
 
@@ -407,23 +403,30 @@ def rand_choice(orginal_size: int, target_size: int, container):
     return idxs
 
 
+def rand_chunk(max_depth, size, container):
+    start = np.random.randint(low=0, high=max_depth - size - 1)
+    res = range(start, start + size)
+    container.extend(res)
+    return res
+
+
 def test(root: str):
     root = Path(root)
     device = torch.device('cuda:0')
     ds = SampleHackDataset(root / "sample.csv", root / "msa", root / "seq", root / "sst")
-    model = SSWrapper(
-        num_class=3,
+    af2 = Alphafold2(
         dim=256,
         depth=12,
         heads=8,
         dim_head=64,
-        num_tokens = constants.NUM_AMINO_ACIDS_EXP,
-        sparse_self_attn = (True, False) * 3,
+        num_tokens=constants.NUM_AMINO_ACIDS_EXP,
+        sparse_self_attn=(True, False) * 3,
         cross_attn_compress_ratio=3,
         reversible=True,
     ).cuda()
+    ssp = SSModule(num_class=NUM_SS_CLASS).cuda()
 
-    optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optim = torch.optim.Adam(list(af2.parameters()) + list(ssp.parameters()), lr=LEARNING_RATE)
     lossFn = nn.CrossEntropyLoss()
     from torch.utils.tensorboard import SummaryWriter
     writer = SummaryWriter()
@@ -456,18 +459,18 @@ def test(root: str):
         # msa = pad(msa, MAX_SEQ_LEN, b, seq_len, msa_depth=msa_depth)
         # sst = pad(sst, MAX_SEQ_LEN, b, seq_len)
 
-        idxs = []
         l = 64
         k = np.math.ceil(seq_len / l)
         r_k = k * l - seq_len
-        id_extension_list = [f"{id}_w{ch_i}" for ch_i in range(k)]
+        id_extension_list = [f"{id}_k{ch_i}" for ch_i in range(k)]
         seq = torch.nn.functional.pad(seq, (0, r_k))
         seq = torch.tensor([[chunk for chunk in seq[i * l:(i + 1) * l]] for i in range(k)])
-        d = 8
+        d = 5
         msa = torch.nn.functional.pad(msa, (0, r_k))
+        msa_row_idxs = []
         msa = torch.tensor(
             [
-                [[chunk for chunk in _seq[i * l:(i + 1) * l]] for _seq in msa[rand_choice(msa_depth, d, idxs)]]
+                [[chunk for chunk in _seq[i * l:(i + 1) * l]] for _seq in msa[rand_chunk(msa_depth, d, msa_row_idxs)]]
                 for i in range(k)
             ]
         )
@@ -480,18 +483,17 @@ def test(root: str):
         tloss = 0
         for i in range(k):
             n_seq, n_msa, cut_off = reshape_input(seq, msa, sst, i)
-            ss, ss_t = reshape_output(model, sst, i, n_seq, n_msa, cut_off)
+            trunk = af2(seq=n_seq, msa=n_msa, ss_only=True, msa_row_pos=msa_row_idxs[i * l:(i + 1) * l], seq_pos=i * l)
+            ss = ssp(trunk)
+            ss, ss_t = reshape_output(sst, i, cut_off, ss)
             loss = lossFn(ss, ss_t)
             tloss += loss
-            
+
         write_loss(writer, global_counter, id, tloss)
         tloss.backward()
         global_counter += 1
-        
-        if accumulated_enough(GRADIENT_ACCUMULATE_EVERY, gradient_counter):
-            gradient_counter = 0
-            optim.step()
-            optim.zero_grad()
+        optim.step()
+        optim.zero_grad()
 
 
 def write_loss(writer, global_counter, id, tloss):
@@ -499,15 +501,14 @@ def write_loss(writer, global_counter, id, tloss):
     writer.add_text("Data id", f"{id}", global_step=global_counter)
 
 
-def reshape_output(model, sst, i, n_seq, n_msa, cut_off):
-    ss = model(seq=n_seq, msa=n_msa, ss_only=True)
-    ss = rearrange(ss, 'b n c -> b c n', c=NUM_SS_CLASS)
-    ss = rearrange(ss, 'b c n -> n b c')
+def reshape_output(sst, i, cut_off, ss):
+    ss = rearrange(ss, 'b n c -> n b c', c=NUM_SS_CLASS)
     ss = ss[:cut_off, ...]
     ss = rearrange(ss, 'n b c -> b c n')
     ss_t = sst[i][:cut_off]
     ss_t = rearrange(ss_t, 'l -> () l').cuda()
-    return ss,ss_t
+    return ss, ss_t
+
 
 def reshape_input(seq, msa, sst, i):
     n_seq = rearrange(seq[i], 'l -> () l').cuda()
@@ -517,7 +518,7 @@ def reshape_input(seq, msa, sst, i):
     for z in range(len(valid)):
         if valid[z]:
             cut_off = z
-    return n_seq,n_msa,cut_off
+    return n_seq, n_msa, cut_off
 
 
 if __name__ == '__main__':
