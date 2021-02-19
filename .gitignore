@@ -6,6 +6,7 @@ notes.md
 *.DS_Store
 *.config
 end2end.py
+tests/custom_tests.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

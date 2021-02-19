@@ -210,9 +210,9 @@ def nerf_torch(a, b, c, l, theta, chi):
     rotate   = torch.stack([cb, n_plane_, n_plane], dim=-1)
     rotate  /= torch.norm(rotate, dim=-2, keepdim=True)
     # calc proto point, rotate
-    d = torch.stack([torch.cos(theta),
-                     torch.sin(theta) * torch.cos(chi),
-                     torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
+    d = torch.stack([-torch.cos(theta),
+                      torch.sin(theta) * torch.cos(chi),
+                      torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
     # extend base point, set length
     return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
 
@@ -361,28 +361,32 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """
     if weights is None:
         weights = np.ones_like(pre_dist_mat)
-    N = pre_dist_mat.shape[-1]
+
+    # ensure batched MDS
+    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
+    # start
+    batch, N, _ = pre_dist_mat.shape
     his = []
     # init random coords
-    best_stress = np.inf 
-    best_3d_coords = 2*np.random.rand(3, N) - 1
+    best_stress = np.inf * np.ones(batch)
+    best_3d_coords = 2*np.random.rand(batch, 3, N) - 1
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
-        dist_mat = np.linalg.norm(np.expand_dims(best_3d_coords,1) - np.expand_dims(best_3d_coords,2), axis=0)
-        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum() * 0.5
+        dist_mat = np.linalg.norm(best_3d_coords[:, :, :, None] - best_3d_coords[:, :, None, :], axis=-3)
+        stress   = (( weights * (dist_mat - pre_dist_mat) )**2).sum(axis=(-1, -2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[dist_mat == 0] = 1e-7
-        ratio = pre_dist_mat / dist_mat
+        ratio = weights * (pre_dist_mat / dist_mat)
         B = -ratio 
-        B[np.arange(N), np.arange(N)] += ratio.sum(axis=1)
+        B[:, np.arange(N), np.arange(N)] += ratio.sum(axis=-1)
         # update - double transpose. TODO: consider fix
-        coords = (1. / N * np.dot(best_3d_coords, B))
-        dis = np.linalg.norm(coords)
+        coords = (1. / N * np.matmul(best_3d_coords, B))
+        dis = np.linalg.norm(coords, axis=(-1, -2))
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
-        if (best_stress - stress / dis) <= tol:
+        if (best_stress - stress / dis).mean() <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
                                                                    stress / dis))
@@ -430,66 +434,78 @@ def get_dihedral_numpy(c1, c2, c3, c4):
     return np.arctan2( ( (np.linalg.norm(u2, axis=-1, keepdims=True) * u1) * np.cross(u2,u3, axis=-1)).sum(axis=-1),  
                        ( np.cross(u1,u2, axis=-1) * np.cross(u2, u3, axis=-1) ).sum(axis=-1) ) 
 
-def fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
+def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
+                    prop=True, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Cterm{-1}, N, Ca{0}) and (N{0}, Ca{+1}, Cterm{+1})
-        * preds: (n_mirrors, 3, N)
-        * stresses: (n_mirrors, steps) historic stresses
+        Inputs:
+        * pred_coords: (batch, 3, N) predicted coordinates
         * N_mask: (N, ) boolean mask for N-term positions
         * CA_mask: (N, ) boolean mask for C-alpha positions
         * C_mask: (N, ) or None. boolean mask for C-alpha positions or
                     automatically calculate from N_mask and CA_mask if None.
+        * prop: bool. whether to return as a proportion of negative phis.
         * verbose: bool. verbosity level
+        Output: (batch, N) containing the phi angles or (batch,) containing
+                the proportions.
     """ 
     # detach gradients for angle calculation - mirror selection
-    preds_ = torch.transpose(preds.detach(), -1 , -2).cpu()
-    n_terms  = preds_[:, N_mask.squeeze()]
-    c_alphas = preds_[:, CA_mask.squeeze()]
+    pred_coords_ = torch.transpose(pred_coords.detach(), -1 , -2).cpu()
+    n_terms  = pred_coords_[:, N_mask.squeeze()]
+    c_alphas = pred_coords_[:, CA_mask.squeeze()]
     # select c_term auto if not passed
     if C_mask is not None: 
-        c_terms = preds_[:, C_mask]
+        c_terms = pred_coords_[:, C_mask]
     else:
-        c_terms  = preds_[ :, torch.logical_not(torch.logical_or(N_mask,CA_mask)).squeeze() ]
-    # compute phis and count lower than 0s
-    phis_count = [ (get_dihedral_torch(c_terms[i,:-1], n_terms[i, 1:], c_alphas[i, 1:], c_terms[i, 1:])<0).sum().item() \
-                   for i in range(preds.shape[0])]
+        c_terms  = pred_coords_[ :, torch.logical_not(torch.logical_or(N_mask,CA_mask)).squeeze() ]
+    # compute phis for every pritein in the batch
+    phis = [get_dihedral_torch(c_terms[i, :-1],
+                               n_terms[i,  1:],
+                               c_alphas[i, 1:],
+                               c_terms[i,  1:]) for i in range(pred_coords.shape[0])]
 
-    idx = np.argmax(phis_count)
-    # debugging/testing if arg passed
-    if verbose:
-        print("Negative phis:", phis_count, "selected", idx)
-    return preds[idx].unsqueeze(0), stresses[idx]
+    # return percentage of lower than 0
+    if prop: 
+        return torch.tensor( [(x<0).float().mean().item() for x in phis] ) 
+    return phis
 
-def fix_mirrors_numpy(preds, stresses, N_mask, CA_mask, C_mask=None, verbose=0):
+
+def calc_phis_numpy(pred_coords, N_mask, CA_mask, C_mask=None,
+                    prop=True, verbose=0):
     """ Filters mirrors selecting the 1 with most N of negative phis.
         Used as part of the MDScaling wrapper if arg is passed. See below.
         Angle Phi between planes: (Cterm{-1}, N, Ca{0}) and (N{0}, Ca{+1}, Cterm{+1})
-        * preds: (n_mirrors, 3, N)
-        * stresses: (n_mirrors, steps) historic stresses
+        Inputs:
+        * pred_coords: (batch, 3, N) predicted coordinates
         * N_mask: (N, ) boolean mask for N-term positions
         * CA_mask: (N, ) boolean mask for C-alpha positions
         * C_mask: (N, ) or None. boolean mask for C-alpha positions or
                     automatically calculate from N_mask and CA_mask if None.
+        * prop: bool. whether to return as a proportion of negative phis.
         * verbose: bool. verbosity level
+        Output: (batch, N) containing the phi angles or (batch,) containing
+                the proportions.
     """ 
-    preds_ = np.transpose(preds, (0, 2, 1))
-    n_terms  = preds_[:, N_mask.squeeze()] 
-    c_alphas = preds_[:, CA_mask.squeeze()]
+    # detach gradients for angle calculation - mirror selection
+    pred_coords_ = np.transpose(pred_coords, (0, 2, 1))
+    n_terms  = pred_coords_[:, N_mask.squeeze()]
+    c_alphas = pred_coords_[:, CA_mask.squeeze()]
     # select c_term auto if not passed
     if C_mask is not None: 
-        c_terms = preds_[:, C_mask]
+        c_terms = pred_coords_[:, C_mask]
     else:
-        c_terms  = preds_[:, (np.ones_like(N_mask)-N_mask-CA_mask).squeeze().astype(bool) ]
-    # compute number of phis lower than 0
-    phis_count = [ (get_dihedral_numpy(c_terms[i,:-1], n_terms[i,:], c_alphas[i,:], c_terms[i,:])<0).sum() \
-                   for i in range(preds.shape[0])]
+        c_terms  = pred_coords_[:, (np.ones_like(N_mask)-N_mask-CA_mask).squeeze().astype(bool) ]
+    # compute phis for every pritein in the batch
+    phis = [get_dihedral_numpy(c_terms[i, :-1],
+                               n_terms[i,  1:],
+                               c_alphas[i, 1:],
+                               c_terms[i,  1:]) for i in range(pred_coords.shape[0])]
 
-    idx = np.argmax(phis_count)
-    # debugging/testing if arg passed
-    if verbose:
-        print("Negative phis:", phis_count, "selected", idx)
-    return preds[idx], stresses[idx]
+    # return percentage of lower than 0
+    if prop: 
+        return np.array( [(x<0).mean() for x in phis] ) 
+    return phis
 
 
 # alignment by centering + rotation to compute optimal RMSD
@@ -609,28 +625,45 @@ def tmscore_numpy(X, Y):
 
 
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
-              fix_mirror=0, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
-    # repeat for mirrors calculations
-    pre_dist_mat = repeat(pre_dist_mat, '() ni nj -> m ni nj', m = max(1, fix_mirror))
+                    fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                               tol=tol, verbose=verbose)
     if not fix_mirror:
-        return preds[0], stresses[0]
+        return preds, stresses
 
-    return fix_mirrors_torch(preds, stresses, N_mask, CA_mask, C_mask)
+    # no need to caculate multiple mirrors - just correct Z axis
+    phi_ratios = calc_phis_torch(preds, N_mask, CA_mask, C_mask, prop=True)
+    for i,pred in enumerate(preds):
+        # fix mirrors by (-1)*Z if more (+) than (-) phi angles
+        if phi_ratios < 0.5:
+            preds[i, -1] = (-1)*preds[i, -1]
+            if verbose == 2:
+                print("Corrected mirror in struct no.", i)
+            
+    return preds, stresses
+
 
 def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
-              fix_mirror=0, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
-    preds = [mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
-                                         tol=tol, verbose=verbose) \
-                 for i in range( max(1,fix_mirror) )]
-
+                    fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
+    # batched mds for full parallel 
+    preds, stresses = mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
+                                              tol=tol, verbose=verbose)
     if not fix_mirror:
-        return preds[0]
+        return preds, stresses
 
-    return fix_mirrors_numpy([x[0] for x in preds],
-                             [x[1] for x in preds], N_mask, CA_mask, C_mask)
+    # no need to caculate multiple mirrors - just correct Z axis
+    phi_ratios = calc_phis_numpy(preds, N_mask, CA_mask, C_mask, prop=True)
+    for i,pred in enumerate(preds):
+        # fix mirrors by (-1)*Z if more (+) than (-) phi angles
+        if phi_ratios < 0.5:
+            preds[i, -1] = (-1)*preds[i, -1]
+            if verbose == 2:
+                print("Corrected mirror in struct no.", i)
+
+    return preds, stresses
+
+
 ################
 ### WRAPPERS ###
 ################
@@ -659,6 +692,7 @@ def MDScaling(pre_dist_mat, **kwargs):
         * best_3d_coords: (3 x N)
         * historic_stress: (timesteps, )
     """
+    pre_dist_mat = expand_dims_to(pre_dist_mat, 3 - len(pre_dist_mat.shape))
     return pre_dist_mat, kwargs
 
 @expand_arg_dims(dim_len = 2)

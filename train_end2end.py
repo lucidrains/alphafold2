@@ -169,10 +169,10 @@ for _ in range(NUM_BATCHES):
         refined = refiner(atom_tokens[cloud_mask], proto_sidechain[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
 
         # rotate / align
-        coords_aligned = Kabsch(refined, coords[cloud_mask])
+        coords_aligned, labels_aligned = Kabsch(refined, coords[cloud_mask])
 
         # loss - RMSE + distogram_dispersion
-        loss = torch.sqrt(criterion(coords_aligned[chain_mask], coords[chain_mask])) + \
+        loss = torch.sqrt(criterion(coords_aligned[chain_mask], labels_aligned[chain_mask])) + \
                dispersion_weight * torch.norm( (1/weights)-1 )
 
         loss.backward()
