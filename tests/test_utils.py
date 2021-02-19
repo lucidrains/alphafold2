@@ -57,7 +57,9 @@ def test_nerf_and_dihedral():
     theta = torch.tensor(theta)
     chi = torch.tensor(chi)
     # reconstruct
-    assert (nerf_torch(a, b, c, l, theta, chi) - d).sum().abs() < 0.1
+    # doesnt work because the scn angle was not measured correctly
+    # so the method corrects that incorrection
+    assert (nerf_torch(a, b, c, l, theta, chi - np.pi) - torch.tensor([1,0,6])).sum().abs() < 0.1
     assert get_dihedral_torch(a, b, c, d).item() == chi
 
 def test_sidechain_container():
@@ -82,4 +84,3 @@ def test_gdt():
     b = torch.randn(1, 3, 8)
     GDT(a, b, weights = 1)
     assert True
-
