@@ -22,13 +22,13 @@ def test_main():
     )
     assert True
 
-def test_reversible():
+def test_msa_tie_row_attn():
     model = Alphafold2(
         dim = 256,
         depth = 2,
         heads = 8,
         dim_head = 64,
-        reversible = True
+        msa_tie_row_attn = True
     )
 
     seq = torch.randint(0, 21, (2, 128))
@@ -42,18 +42,15 @@ def test_reversible():
         mask = mask,
         msa_mask = msa_mask
     )
-
-    distogram.sum().backward()
     assert True
 
-def test_inter_msa_self_attn():
+def test_reversible():
     model = Alphafold2(
         dim = 256,
         depth = 2,
         heads = 8,
         dim_head = 64,
-        reversible = True,
-        inter_msa_self_attn = False  # turn off attention across MSA sequences
+        reversible = True
     )
 
     seq = torch.randint(0, 21, (2, 128))

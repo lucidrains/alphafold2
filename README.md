@@ -93,26 +93,30 @@ model = Alphafold2(
 ).cuda()
 ```
 
+## MSA processing in Trunk
+
+<img src="./images/msa-transformer-diagram.png" width="500px"></img>
+
+A <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">new paper</a> by <a href="https://github.com/rmrao">Roshan Rao</a> proposes using axial attention for pretraining on MSA's. Given the strong results, this repository will use the same scheme in the trunk, specifically for the MSA self-attention.
+
+You can also tie the row attentions of the MSA with the `msa_tie_row_attn = True` setting on initialization of `Alphafold2`. However, in order to use this, you must make sure that none of the rows in the batch of MSA is made of padding. In other words, your `msa_mask` must be completely set to `True`
+
+```python
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    msa_tie_row_attn = True # just set this to true, but batches of MSA must not contain any row that is all padding
+)
+```
+
 ## Equivariant Attention
 
 There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
-
-## Miscellaneous Settings
-
-Below are some miscellaneous settings for cutting down on attention
-
-```python
-model = Alphafold2(
-    dim = 256,
-    depth = 12,
-    heads = 8,
-    dim_head = 64,
-    inter_msa_self_attn = False   # turns off self-attention across MSA. each MSA will only attend internally
-).cuda()
-```
 
 ## Testing
 
@@ -169,6 +173,17 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
     year    = {2020},
     archivePrefix = {arXiv},
     primaryClass = {q-bio.BM}
+}
+```
+
+```bibtex
+@article{Rao2021.02.12.430858,
+    author  = {Rao, Roshan and Liu, Jason and Verkuil, Robert and Meier, Joshua and Canny, John F. and Abbeel, Pieter and Sercu, Tom and Rives, Alexander},
+    title   = {MSA Transformer},
+    year    = {2021},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/02/13/2021.02.12.430858},
+    journal = {bioRxiv}
 }
 ```
 
