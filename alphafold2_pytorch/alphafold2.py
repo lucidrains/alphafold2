@@ -46,7 +46,7 @@ class PreNormCross(nn.Module):
 
     def forward(self, x, context, *args, **kwargs):
         x = self.norm(x)
-        context = self.norm(context)
+        context = self.norm_context(context)
         return self.fn(x, context, *args, **kwargs)
 
 class GEGLU(nn.Module):
