@@ -1,6 +1,9 @@
 # Training Data
 sidechainnet_data/
-
+# Experiment Data
+experiment/sample_msa/
+# experiments runs (ad_hoc summary_writters)
+runs/
 # random stuff like notes
 notes.md
 *.DS_Store
