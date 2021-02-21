@@ -52,13 +52,13 @@ def test_templates():
         dim_head = 64
     )
 
-    seq = torch.randint(0, 21, (2, 128))
+    seq = torch.randint(0, 21, (2, 16))
     mask = torch.ones_like(seq).bool()
 
-    msa = torch.randint(0, 21, (2, 5, 64))
+    msa = torch.randint(0, 21, (2, 5, 32))
     msa_mask = torch.ones_like(msa).bool()
 
-    templates = torch.randint(0, 37, (2, 2, 128, 128))
+    templates = torch.randint(0, 37, (2, 2, 16, 16))
     templates_mask = torch.ones_like(templates).bool()
 
     distogram = model(
@@ -69,8 +69,6 @@ def test_templates():
         templates = templates,
         templates_mask = templates_mask
     )
-
-    assert True
 
 def test_reversible():
     model = Alphafold2(
