@@ -506,7 +506,7 @@ class Alphafold2(nn.Module):
                 # concat template and primary sequence, for axial attention along the template dimension
                 # very similar to the attention across the time axis from https://arxiv.org/abs/2102.05095
 
-                x = rearrange(x, 'b (h w) d -> (b h w) () d', h = n)
+                x = rearrange(x, 'b n d -> (b n) () d', n = n ** 2)
                 t = rearrange(t, '(b t) n d -> (b n) t d', t = num_templates)
 
                 y_mask = None

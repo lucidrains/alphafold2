@@ -44,6 +44,34 @@ def test_msa_tie_row_attn():
     )
     assert True
 
+def test_templates():
+    model = Alphafold2(
+        dim = 256,
+        depth = 2,
+        heads = 8,
+        dim_head = 64
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 64))
+    msa_mask = torch.ones_like(msa).bool()
+
+    templates = torch.randint(0, 37, (2, 2, 128, 128))
+    templates_mask = torch.ones_like(templates).bool()
+
+    distogram = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        templates = templates,
+        templates_mask = templates_mask
+    )
+
+    assert True
+
 def test_reversible():
     model = Alphafold2(
         dim = 256,
