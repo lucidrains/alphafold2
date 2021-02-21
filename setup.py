@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'alphafold2-pytorch',
   packages = find_packages(),
-  version = '0.0.25',
+  version = '0.0.26',
   license='MIT',
   description = 'AlphaFold2 - Pytorch',
   author = 'Phil Wang, Eric Alcaide',
@@ -15,7 +15,6 @@ setup(
     'protein folding'
   ],
   install_requires=[
-    'axial_positional_embedding',
     'einops>=0.3',
     'lie-transformer-pytorch',
     'numpy',

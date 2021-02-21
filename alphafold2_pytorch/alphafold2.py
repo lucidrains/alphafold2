@@ -7,8 +7,6 @@ import torch.nn.functional as F
 from math import sqrt
 from einops import rearrange, repeat, reduce
 
-from axial_positional_embedding import AxialPositionalEmbedding
-
 import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.reversible import ReversibleSequence
 
@@ -351,7 +349,8 @@ class Alphafold2(nn.Module):
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
 
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.pos_emb = AxialPositionalEmbedding(dim, (max_seq_len, max_seq_len))
+        self.pos_emb = nn.Embedding(max_seq_len, dim)
+        self.pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
         # multiple sequence alignment position embedding
 
@@ -361,7 +360,8 @@ class Alphafold2(nn.Module):
         # template embedding
 
         self.template_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
-        self.template_pos_emb = AxialPositionalEmbedding(dim, (max_seq_len, max_seq_len))
+        self.template_pos_emb = nn.Embedding(max_seq_len, dim)
+        self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
         # custom embedding projection
 
@@ -428,6 +428,7 @@ class Alphafold2(nn.Module):
         embedds = None,
     ):
         n, device = seq.shape[1], seq.device
+        n_range = torch.arange(n, device = device)
 
         # unpack (AA_code, atom_pos)
 
@@ -451,7 +452,8 @@ class Alphafold2(nn.Module):
 
         # axial positional embedding
 
-        x += self.pos_emb(x)
+        pos_emb = rearrange(self.pos_emb(n_range), 'i d -> () i () d') + rearrange(self.pos_emb_ax(n_range), 'j d -> () () j d')
+        x += rearrange(pos_emb, 'b i j d -> b (i j) d')
 
         # embed multiple sequence alignment (msa)
 
@@ -483,7 +485,12 @@ class Alphafold2(nn.Module):
             template_shape = rearrange(t, 'b t h w d -> (b t) h w d').shape
 
             t = rearrange(t, 'b t h w d -> (b t) (h w) d')
-            t += self.template_pos_emb(t)
+
+            # template pos emb
+
+            pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () j d')
+            pos_emb = rearrange(pos_emb, 'b i j d -> b (i j) d')
+            t += pos_emb
 
             if exists(templates_mask):
                 t_mask = rearrange(templates_mask, 'b t h w -> (b t) (h w)')
