@@ -518,7 +518,7 @@ class Alphafold2(nn.Module):
                 y = torch.cat((x, t), dim = 1)
                 y = cross_attn(y, mask = y_mask) + y
 
-                x = rearrange(y[:, 0], '(b h w) d -> b (h w) d', h = n, w = n)
+                x = rearrange(y[:, 0], '(b n) d -> b n d', n = n ** 2)
                 t = rearrange(y[:, 1:], '(b n) t d -> (b t) n d', n = (n ** 2))
 
                 t = ff(t) + t
