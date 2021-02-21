@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from math import sqrt
 from einops import rearrange, repeat, reduce
 
+from axial_positional_embedding import AxialPositionalEmbedding
+
 import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.reversible import ReversibleSequence
 
@@ -342,19 +344,24 @@ class Alphafold2(nn.Module):
         reversible = False,
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
-        msa_tie_row_attn = False
+        msa_tie_row_attn = False,
+        template_attn_depth = 2
     ):
         super().__init__()
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
 
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.pos_emb_ax = nn.Embedding(max_seq_len, dim)
+        self.pos_emb = AxialPositionalEmbedding(dim, (max_seq_len, max_seq_len))
 
         # multiple sequence alignment position embedding
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
         self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA, dim)
+
+        # template embedding
+
+        self.template_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
+        self.template_pos_emb = AxialPositionalEmbedding(dim, (max_seq_len, max_seq_len))
 
         # custom embedding projection
 
@@ -364,6 +371,17 @@ class Alphafold2(nn.Module):
 
         prenorm = partial(PreNorm, dim)
         prenorm_cross = partial(PreNormCross, dim)
+
+        template_layers = nn.ModuleList([])
+        for _ in range(template_attn_depth):
+            template_layers.append(nn.ModuleList([
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
+                prenorm(FeedForward(dim = dim, dropout = ff_dropout))
+            ]))
+
+        self.template_attn_net = template_layers
 
         layers = nn.ModuleList([])
         for _, layer_sparse_attn in zip(range(depth), layers_sparse_attn):
@@ -399,7 +417,16 @@ class Alphafold2(nn.Module):
             nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
         )
 
-    def forward(self, seq, msa = None, embedds = None, mask = None, msa_mask = None):
+    def forward(
+        self,
+        seq,
+        msa = None,
+        mask = None,
+        msa_mask = None,
+        templates = None,
+        templates_mask = None,
+        embedds = None,
+    ):
         n, device = seq.shape[1], seq.device
 
         # unpack (AA_code, atom_pos)
@@ -411,22 +438,22 @@ class Alphafold2(nn.Module):
 
         x = self.token_emb(seq)
 
-        # use axial positional embedding
-
-        seq_range = torch.arange(n, device = device)
-        ax1 = x + self.pos_emb(seq_range)[None, ...]
-        ax2 = x + self.pos_emb_ax(seq_range)[None, ...]
-
         # outer sum
 
-        x = rearrange(ax1, 'b i d -> b i () d') + rearrange(ax2, 'b j d-> b () j d') # create pair-wise residue embeds
+        x = rearrange(x, 'b i d -> b i () d') + rearrange(x, 'b j d-> b () j d') # create pair-wise residue embeds
         x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j') if exists(mask) else None
+
+        # flatten
 
         seq_shape = x.shape
         x = rearrange(x, 'b i j d -> b (i j) d')
         x_mask = rearrange(x_mask, 'b i j -> b (i j)') if exists(mask) else None
 
-        # embed multiple sequence alignment
+        # axial positional embedding
+
+        x += self.pos_emb(x)
+
+        # embed multiple sequence alignment (msa)
 
         m = None
         if exists(msa):
@@ -444,6 +471,50 @@ class Alphafold2(nn.Module):
 
         if exists(msa_mask):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
+
+        # trunk (template attention, wip)
+
+        if exists(templates):
+            _, num_templates, *_ = templates.shape
+
+            # embed template
+
+            t = self.template_emb(templates)
+            template_shape = rearrange(t, 'b t h w d -> (b t) h w d').shape
+
+            t = rearrange(t, 'b t h w d -> (b t) (h w) d')
+            t += self.template_pos_emb(t)
+
+            if exists(templates_mask):
+                t_mask = rearrange(templates_mask, 'b t h w -> (b t) (h w)')
+
+            assert t.shape[-2:] == x.shape[-2:]
+
+            # template self attention followed by cross attention axially to primary sequence
+
+            for (seq_self_attn, template_self_attn, cross_attn, ff) in self.template_attn_net:
+                x = seq_self_attn(x, mask = x_mask, shape = seq_shape)
+                t = template_self_attn(t, mask = t_mask, shape = template_shape) + t
+
+                # concat template and primary sequence, for axial attention along the template dimension
+                # very similar to the attention across the time axis from https://arxiv.org/abs/2102.05095
+
+                x = rearrange(x, 'b (h w) d -> (b h w) () d', h = n)
+                t = rearrange(t, '(b t) n d -> (b n) t d', t = num_templates)
+
+                y_mask = None
+                if exists(templates_mask) and exists(x_mask):
+                    t_mask_ = rearrange(t_mask, '(b t) n -> (b n) t', t = num_templates)
+                    mask_ = rearrange(x_mask, 'b n -> (b n) ()')
+                    y_mask = torch.cat((mask_, t_mask_), dim = 1)
+
+                y = torch.cat((x, t), dim = 1)
+                y = cross_attn(y, mask = y_mask) + y
+
+                x = rearrange(y[:, 0], '(b h w) d -> b (h w) d', h = n, w = n)
+                t = rearrange(y[:, 1:], '(b n) t d -> (b t) n d', n = (n ** 2))
+
+                t = ff(t) + t
 
         # trunk
 

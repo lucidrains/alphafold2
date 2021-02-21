@@ -111,6 +111,52 @@ model = Alphafold2(
 )
 ```
 
+## Template processing in Trunk (wip)
+
+Template processing is also largely done with axial attention, with cross attention done along the number of templates dimension. This largely follows the same scheme as in the recent all-attention approach to video classification as shown <a href="https://github.com/lucidrains/TimeSformer-pytorch">here</a>.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 5,
+    heads = 8,
+    dim_head = 64,
+    reversible = True,
+    sparse_self_attn = False,
+    max_seq_len = 256,
+    cross_attn_compress_ratio = 3
+).cuda()
+
+seq = torch.randint(0, 21, (1, 16)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+
+msa = torch.randint(0, 21, (1, 10, 16)).cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+templates = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
+templates_mask = torch.ones_like(templates).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask,
+    templates = templates,
+    templates_mask = templates_mask
+)
+```
+
+####  Templates Todo
+
+- [ ] build template self and cross attention into the main reversible network
+
+At the moment, it goes through its own round of self-cross attention prior to the main MSA <-> sequence self cross attention, just for demonstration purposes.
+
+- [ ] allow the main network to take care of binning raw template distograms, to save users from having to do the binning logic
+
 ## Equivariant Attention
 
 There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
