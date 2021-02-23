@@ -136,15 +136,17 @@ mask = torch.ones_like(seq).bool().cuda()
 msa = torch.randint(0, 21, (1, 10, 16)).cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
-templates = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
-templates_mask = torch.ones_like(templates).bool().cuda()
+templates_seq = torch.randint(0, 21, (1, 2, 16)).cuda()
+templates_mask = torch.ones_like(templates_seq).bool().cuda()
+templates_dist = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
 
 distogram = model(
     seq,
     msa,
     mask = mask,
     msa_mask = msa_mask,
-    templates = templates,
+    templates_seq = templates_seq,
+    templates_dist = templates_dist,
     templates_mask = templates_mask
 )
 ```

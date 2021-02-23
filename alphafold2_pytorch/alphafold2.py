@@ -361,7 +361,7 @@ class Alphafold2(nn.Module):
 
         # template embedding
 
-        self.template_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
+        self.template_dist_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
         self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
         self.template_pos_emb = nn.Embedding(max_seq_len, dim)
         self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
@@ -426,7 +426,8 @@ class Alphafold2(nn.Module):
         msa = None,
         mask = None,
         msa_mask = None,
-        templates = None,
+        templates_seq = None,
+        templates_dist = None,
         templates_mask = None,
         embedds = None,
     ):
@@ -479,12 +480,18 @@ class Alphafold2(nn.Module):
 
         # trunk (template attention, wip)
 
-        if exists(templates):
-            _, num_templates, *_ = templates.shape
+        if exists(templates_seq):
+            assert exists(templates_dist), 'template binned residue distances must be supplied `templates_dist`'
+            _, num_templates, *_ = templates_seq.shape
 
             # embed template
 
-            t = self.template_emb(templates)
+            t_seq = self.token_emb(templates_seq)
+            t_dist = self.template_dist_emb(templates_dist)
+
+            t_seq = rearrange(t_seq, 'b t i d -> b t i () d') + rearrange(t_seq, 'b t j d -> b t () j d')
+            t = t_seq + t_dist
+
             template_shape = rearrange(t, 'b t h w d -> (b t) h w d').shape
 
             # template pos emb
@@ -499,7 +506,8 @@ class Alphafold2(nn.Module):
             t += pos_emb
 
             if exists(templates_mask):
-                t_mask = rearrange(templates_mask, 'b t h w -> (b t) (h w)')
+                t_mask = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
+                t_mask = rearrange(t_mask, 'b t h w -> (b t) (h w)')
 
             assert t.shape[-2:] == x.shape[-2:]
 
