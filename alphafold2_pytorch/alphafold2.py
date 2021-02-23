@@ -337,6 +337,8 @@ class Alphafold2(nn.Module):
         pos_token = 3,
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
+        max_num_msas = constants.MAX_NUM_MSA,
+        max_num_templates = constants.MAX_NUM_TEMPLATES,
         attn_dropout = 0.,
         ff_dropout = 0.,
         reversible = False,
@@ -355,11 +357,12 @@ class Alphafold2(nn.Module):
         # multiple sequence alignment position embedding
 
         self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(constants.MAX_NUM_MSA, dim)
+        self.msa_num_pos_emb = nn.Embedding(max_num_msas, dim)
 
         # template embedding
 
         self.template_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
+        self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
         self.template_pos_emb = nn.Embedding(max_seq_len, dim)
         self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
@@ -484,9 +487,12 @@ class Alphafold2(nn.Module):
             t = self.template_emb(templates)
             template_shape = rearrange(t, 'b t h w d -> (b t) h w d').shape
 
-            t = rearrange(t, 'b t h w d -> (b t) (h w) d')
-
             # template pos emb
+
+            template_num_pos_emb = self.template_num_pos_emb(torch.arange(num_templates, device = device))
+
+            t += rearrange(template_num_pos_emb, 't d-> () t () () d')
+            t = rearrange(t, 'b t h w d -> (b t) (h w) d')
 
             pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () j d')
             pos_emb = rearrange(pos_emb, 'b i j d -> b (i j) d')

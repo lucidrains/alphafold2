@@ -3,6 +3,7 @@ import torch
 # constants
 
 MAX_NUM_MSA = 20
+MAX_NUM_TEMPLATES = 10
 NUM_AMINO_ACIDS = 21
 NUM_EMBEDDS_TR = 1280 # best esm model 
 DISTOGRAM_BUCKETS = 37
