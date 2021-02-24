@@ -151,6 +151,49 @@ distogram = model(
 )
 ```
 
+If sidechain information is also present, in the form of the unit vector between the C and C-alpha coordinates of each residue, you can also pass it in as follows.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 5,
+    heads = 8,
+    dim_head = 64,
+    reversible = True,
+    sparse_self_attn = False,
+    max_seq_len = 256,
+    cross_attn_compress_ratio = 3
+).cuda()
+
+seq = torch.randint(0, 21, (1, 16)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+
+msa = torch.randint(0, 21, (1, 10, 16)).cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+templates_seq = torch.randint(0, 21, (1, 2, 16)).cuda()
+templates_mask = torch.ones_like(templates_seq).bool().cuda()
+templates_dist = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
+
+templates_coors = torch.randn(1, 2, 16, 3).cuda()
+templates_sidechains = torch.randn(1, 2, 16, 3).cuda() # unit vectors of difference of C and C-alpha coordinates
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask,
+    templates_seq = templates_seq,
+    templates_dist = templates_dist,
+    templates_mask = templates_mask,
+    templates_coors = templates_coors,
+    templates_sidechains = templates_sidechains
+)
+```
+
 ####  Templates Todo
 
 - [ ] build template self and cross attention into the main reversible network
@@ -159,7 +202,7 @@ At the moment, it goes through its own round of self-cross attention prior to th
 
 - [ ] allow the main network to take care of binning raw template distograms, to save users from having to do the binning logic
 
-- [ ] incorporate template sidechain information, as unit vectors of difference between C and C-alpha coordinates. use either <a href="https://github.com/lucidrains/geometric-vector-perceptron">GVP</a> or one-layer, one-headed SE3 Transformers for encoding
+- [x] incorporate template sidechain information, as unit vectors of difference between C and C-alpha coordinates. use either <a href="https://github.com/lucidrains/geometric-vector-perceptron">GVP</a> or one-layer, one-headed SE3 Transformers for encoding
 
 ## Equivariant Attention
 

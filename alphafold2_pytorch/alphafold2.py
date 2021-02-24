@@ -366,6 +366,21 @@ class Alphafold2(nn.Module):
         self.template_pos_emb = nn.Embedding(max_seq_len, dim)
         self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
+        # template sidechain encoding
+
+        self.sidechains_proj = nn.Parameter(torch.randn(1, dim))
+
+        self.template_sidechain_emb = SE3Transformer(
+            dim = dim,
+            num_neighbors = 4,
+            dim_head = 64,
+            depth = 2,
+            input_degrees = 2,
+            num_degrees = 2,
+            output_degrees = 1,
+            reversible = True
+        )
+
         # custom embedding projection
 
         self.embedd_project = nn.Linear(num_embedds, dim)
@@ -429,6 +444,8 @@ class Alphafold2(nn.Module):
         templates_seq = None,
         templates_dist = None,
         templates_mask = None,
+        templates_coors = None,
+        templates_sidechains = None,
         embedds = None,
     ):
         n, device = seq.shape[1], seq.device
@@ -487,6 +504,33 @@ class Alphafold2(nn.Module):
             # embed template
 
             t_seq = self.token_emb(templates_seq)
+
+            # if sidechain information is present
+            # color the residue embeddings with the sidechain type 1 features
+            # todo (make efficient)
+
+            if exists(templates_sidechains):
+                shape = t_seq.shape
+
+                t_seq = rearrange(t_seq, 'b t n d-> (b t) n d ()')
+
+                templates_sidechains = rearrange(templates_sidechains, 'b t n m -> (b t) n () m')
+                templates_sidechains = einsum('b n d m, d e -> b n e m', templates_sidechains, self.sidechains_proj)
+                templates_coors = rearrange(templates_coors, 'b t n m -> (b t) n m')
+
+                se3_templates_mask = rearrange(templates_mask, 'b t n -> (b t) n')
+
+                t_seq = self.template_sidechain_emb(
+                    {'0': t_seq, '1': templates_sidechains},
+                    templates_coors,
+                    mask = se3_templates_mask,
+                    return_type = 0
+                )
+
+                t_seq = t_seq.reshape(*shape)
+
+            # embed template distances
+
             t_dist = self.template_dist_emb(templates_dist)
 
             t_seq = rearrange(t_seq, 'b t i d -> b t i () d') + rearrange(t_seq, 'b t j d -> b t () j d')
