@@ -197,7 +197,7 @@ distogram = model(
 
 At the moment, it goes through its own round of self-cross attention prior to the main MSA <-> sequence self cross attention, just for demonstration purposes.
 
-- [ ] allow the main network to take care of binning raw template distograms, to save users from having to do the binning logic
+- [x] allow the main network to take care of binning raw template distograms, to save users from having to do the binning logic
 
 - [x] incorporate template sidechain information, as unit vectors of difference between C and C-alpha coordinates. use either <a href="https://github.com/lucidrains/geometric-vector-perceptron">GVP</a> or one-layer, one-headed SE3 Transformers for encoding
 
