@@ -146,6 +146,7 @@ distogram = model(
     mask = mask,
     msa_mask = msa_mask,
     templates_seq = templates_seq,
+    templates_coors = templates_coors,
     templates_mask = templates_mask
 )
 ```
