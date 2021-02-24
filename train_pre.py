@@ -7,7 +7,7 @@ from einops import rearrange
 import sidechainnet as scn
 from alphafold2_pytorch import Alphafold2
 import alphafold2_pytorch.constants as constants
-
+from alphafold2_pytorch.utils import get_bucketed_distance_matrix
 
 # constants
 
@@ -31,13 +31,6 @@ def cycle(loader, cond = lambda x: True):
             if not cond(data):
                 continue
             yield data
-
-def get_bucketed_distance_matrix(coords, mask):
-    distances = torch.cdist(coords, coords, p=2)
-    boundaries = torch.linspace(2, 20, steps = DISTOGRAM_BUCKETS, device = coords.device)
-    discretized_distances = torch.bucketize(distances, boundaries[:-1])
-    discretized_distances.masked_fill_(~(mask[:, :, None] & mask[:, None, :]), IGNORE_INDEX)
-    return discretized_distances
 
 # get data
 
@@ -79,7 +72,7 @@ for _ in range(NUM_BATCHES):
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
-        discretized_distances = get_bucketed_distance_matrix(coords[:, :, 0], mask)
+        discretized_distances = get_bucketed_distance_matrix(coords[:, :, 0], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
 
         # predict
 

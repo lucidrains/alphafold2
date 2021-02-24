@@ -28,6 +28,15 @@ import alphafold2_pytorch.constants as constants
 
 DISTANCE_THRESHOLDS = torch.linspace(2, 20, steps = constants.DISTOGRAM_BUCKETS)
 
+# distance binning function
+
+def get_bucketed_distance_matrix(coords, mask, num_buckets = constants.DISTOGRAM_BUCKETS, ignore_index = -100):
+    distances = torch.cdist(coords, coords, p=2)
+    boundaries = torch.linspace(2, 20, steps = num_buckets, device = coords.device)
+    discretized_distances = torch.bucketize(distances, boundaries[:-1])
+    discretized_distances.masked_fill_(~(mask[..., None] & mask[..., None, :]), ignore_index)
+    return discretized_distances
+
 # decorators
 
 def set_backend_kwarg(fn):

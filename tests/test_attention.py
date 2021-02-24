@@ -59,8 +59,8 @@ def test_templates():
     msa_mask = torch.ones_like(msa).bool()
 
     templates_seq = torch.randint(0, 21, (2, 2, 16))
+    templates_coors = torch.randn(2, 2, 16, 3)
     templates_mask = torch.ones_like(templates_seq).bool()
-    templates_dist = torch.randint(0, 37, (2, 2, 16, 16))
 
     distogram = model(
         seq,
@@ -68,7 +68,7 @@ def test_templates():
         mask = mask,
         msa_mask = msa_mask,
         templates_seq = templates_seq,
-        templates_dist = templates_dist,
+        templates_coors = templates_coors,
         templates_mask = templates_mask
     )
 

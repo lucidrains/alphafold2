@@ -8,6 +8,7 @@ from math import sqrt
 from einops import rearrange, repeat, reduce
 
 import alphafold2_pytorch.constants as constants
+from alphafold2_pytorch.utils import get_bucketed_distance_matrix
 from alphafold2_pytorch.reversible import ReversibleSequence
 
 from se3_transformer_pytorch import SE3Transformer
@@ -480,6 +481,7 @@ class Alphafold2(nn.Module):
         # embed multiple sequence alignment (msa)
 
         m = None
+        msa_shape = None
         if exists(msa):
             m = self.token_emb(msa)
             m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
@@ -499,8 +501,12 @@ class Alphafold2(nn.Module):
         # trunk (template attention, wip)
 
         if exists(templates_seq):
-            assert exists(templates_dist), 'template binned residue distances must be supplied `templates_dist`'
+            assert exists(templates_coors), 'template residue coordinates must be supplied `templates_coors`'
             _, num_templates, *_ = templates_seq.shape
+
+
+            if not exists(templates_dist):
+                templates_dist = get_bucketed_distance_matrix(templates_coors, templates_mask, constants.DISTOGRAM_BUCKETS)
 
             # embed template
 

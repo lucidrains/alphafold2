@@ -137,8 +137,8 @@ msa = torch.randint(0, 21, (1, 10, 16)).cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
 templates_seq = torch.randint(0, 21, (1, 2, 16)).cuda()
+templates_coors = torch.randint(0, 37, (1, 2, 16, 3)).cuda()
 templates_mask = torch.ones_like(templates_seq).bool().cuda()
-templates_dist = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
 
 distogram = model(
     seq,
@@ -146,7 +146,6 @@ distogram = model(
     mask = mask,
     msa_mask = msa_mask,
     templates_seq = templates_seq,
-    templates_dist = templates_dist,
     templates_mask = templates_mask
 )
 ```
@@ -175,10 +174,9 @@ msa = torch.randint(0, 21, (1, 10, 16)).cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
 templates_seq = torch.randint(0, 21, (1, 2, 16)).cuda()
-templates_mask = torch.ones_like(templates_seq).bool().cuda()
-templates_dist = torch.randint(0, 37, (1, 2, 16, 16)).cuda()  # template distances are already binned to 37 unique values
-
 templates_coors = torch.randn(1, 2, 16, 3).cuda()
+templates_mask = torch.ones_like(templates_seq).bool().cuda()
+
 templates_sidechains = torch.randn(1, 2, 16, 3).cuda() # unit vectors of difference of C and C-alpha coordinates
 
 distogram = model(
@@ -187,7 +185,6 @@ distogram = model(
     mask = mask,
     msa_mask = msa_mask,
     templates_seq = templates_seq,
-    templates_dist = templates_dist,
     templates_mask = templates_mask,
     templates_coors = templates_coors,
     templates_sidechains = templates_sidechains
