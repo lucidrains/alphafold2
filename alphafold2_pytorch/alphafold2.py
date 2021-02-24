@@ -372,9 +372,10 @@ class Alphafold2(nn.Module):
 
         self.template_sidechain_emb = SE3Transformer(
             dim = dim,
-            num_neighbors = 4,
-            dim_head = 64,
-            depth = 2,
+            dim_head = dim,
+            heads = 1,
+            num_neighbors = 12,
+            depth = 4,
             input_degrees = 2,
             num_degrees = 2,
             output_degrees = 1,
