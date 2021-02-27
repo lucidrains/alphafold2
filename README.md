@@ -209,6 +209,8 @@ There are two equivariant self attention libraries that I have prepared for the 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
 
+Update - A new paper from Welling uses invariant features for E(n) equivariance, outperforming SE3 Transformer at a number of benchmarks at much lower costs. I have started a repository <a href="https://github.com/lucidrains/egnn-pytorch">here</a> and will eventually build out an E(n)-Transformer.
+
 ## Testing
 
 ```bash
