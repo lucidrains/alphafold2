@@ -211,6 +211,8 @@ There are two equivariant self attention libraries that I have prepared for the 
 
 Update - A new paper from Welling uses invariant features for E(n) equivariance, outperforming SE3 Transformer at a number of benchmarks at much lower costs. I have started a repository <a href="https://github.com/lucidrains/egnn-pytorch">here</a> and will eventually build out an E(n)-Transformer.
 
+Update 2 - https://github.com/lucidrains/En-transformer Another researcher has raised concerns that E3 may be less expressive than SE3. Will hear back from the paper authors whether E(n)-GNN can be used without worry for the structure refinement
+
 ## Testing
 
 ```bash
