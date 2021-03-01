@@ -294,9 +294,9 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist - don't do masked filling to avoid inplace errors
-    diag_mask = ( torch.ones(shape[-2], device=device) - torch.eye(shape[-2], device = device) ).unsqueeze(0)
+    diag_mask = ( torch.ones(shape[-2], shape[-2], device=device) - torch.eye(shape[-2], device = device) ).unsqueeze(0)
     central   = expand_dims_to(central, 3 - len(central.shape))
-    central  *= diag_mask
+    central  *= diag_mask.type(central.type())
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
