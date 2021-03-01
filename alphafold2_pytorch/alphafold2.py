@@ -12,6 +12,7 @@ from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distog
 from alphafold2_pytorch.reversible import ReversibleSequence
 
 from se3_transformer_pytorch import SE3Transformer
+from se3_transformer_pytorch.utils import torch_default_dtype
 
 # helpers
 
@@ -450,19 +451,20 @@ class Alphafold2(nn.Module):
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
 
-        self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
-        self.to_refined_coords_delta = nn.Linear(structure_module_dim, 1)
+        with torch_default_dtype(torch.float64):
+            self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
+            self.to_refined_coords_delta = nn.Linear(structure_module_dim, 1)
 
-        self.structure_module = SE3Transformer(
-            dim = structure_module_dim,
-            depth = structure_module_depth,
-            input_degrees = 1,
-            num_degrees = 3,
-            output_degrees = 2,
-            heads = structure_module_heads,
-            num_neighbors = structure_module_knn,
-            differentiable_coors = True
-        )
+            self.structure_module = SE3Transformer(
+                dim = structure_module_dim,
+                depth = structure_module_depth,
+                input_degrees = 1,
+                num_degrees = 3,
+                output_degrees = 2,
+                heads = structure_module_heads,
+                num_neighbors = structure_module_knn,
+                differentiable_coors = True
+            )
 
     def forward(
         self,
@@ -651,15 +653,21 @@ class Alphafold2(nn.Module):
         coords = torch.cat(coords, dim = 0)
         x = self.structure_module_embeds(seq)
 
-        for _ in range(self.structure_module_refinement_iters):
-            output = self.structure_module(x, coords, mask = mask)
-            x, refined_coords = output['0'], output['1']
+        original_dtype = coords.dtype
 
-            refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
-            refined_coords = self.to_refined_coords_delta(refined_coords)
-            refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
+        x, coords = map(lambda t: t.double(), (x, coords))
 
-            x = rearrange(x, 'b n c () -> b n c')
-            coords = coords + refined_coords
+        with torch_default_dtype(torch.float64):
+            for _ in range(self.structure_module_refinement_iters):
+                output = self.structure_module(x, coords, mask = mask)
+                x, refined_coords = output['0'], output['1']
 
+                refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
+                refined_coords = self.to_refined_coords_delta(refined_coords)
+                refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
+
+                x = rearrange(x, 'b n c () -> b n c')
+                coords = coords + refined_coords
+
+        coords.type(original_dtype)
         return coords
