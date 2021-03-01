@@ -335,7 +335,6 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
-        pos_token = 3,
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
         max_num_msas = constants.MAX_NUM_MSA,
