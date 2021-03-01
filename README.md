@@ -14,6 +14,8 @@ $ pip install alphafold2-pytorch
 
 ## Usage
 
+Predicting distogram, like Alphafold-1, but with attention
+
 ```python
 import torch
 from alphafold2_pytorch import Alphafold2
@@ -38,15 +40,52 @@ distogram = model(
     mask = mask,
     msa_mask = msa_mask
 ) # (1, 128, 128, 37)
-
-distances, weights = center_distogram_torch(distogram)
-
-coords_3d, _ = MDScaling(distances, 
-    weights = weights,
-    iters = 200, 
-    fix_mirror = 0
-)
 ```
+
+## Predicting Coordinates (wip)
+
+Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
+
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    predict_coords = True,
+    structure_module_dim = 4,               # se3 transformer dimension
+    structure_module_depth = 1,             # depth
+    structure_module_heads = 1,             # heads
+    structure_module_dim_head = 16,         # dimension of heads
+    structure_module_refinement_iters = 2   # number of equivariant coordinate refinement iterations
+).cuda()
+
+seq = torch.randint(0, 21, (2, 64)).cuda()
+msa = torch.randint(0, 21, (2, 5, 32)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+coords = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (2, 64, 3)
+
+```
+
+### Todo
+
+- [ ] pass in the weighted average of the embeddings from the trunk into type-0 of structure module
+- [ ] use pixelshuffle to upsample by a factor of 3 to backbone C-alpha, C, N.
+- [ ] determine whether the lightweight E(n)-Transformer can be a replacement, check out equivariant attention section below
+
+- [ ] there is a bug with inplace operations for center distogram and MDS, when trying to backpropagate through the operations
+- [ ] see if MDS can be done in batches, although without batches is fine too, as there is no batch norm in the system, and it is likely to be trained batch size of 1 at a time
 
 ## Sparse Attention
 
@@ -314,5 +353,16 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
     eprint    = {1707.04585},
     archivePrefix = {arXiv},
     primaryClass = {cs.CV}
+}
+```
+
+```bibtex
+@misc{fuchs2021iterative,
+    title   = {Iterative SE(3)-Transformers},
+    author  = {Fabian B. Fuchs and Edward Wagstaff and Justas Dauparas and Ingmar Posner},
+    year    = {2021},
+    eprint  = {2102.13419},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.LG}
 }
 ```

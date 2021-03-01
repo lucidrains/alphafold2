@@ -72,6 +72,30 @@ def test_templates():
         templates_mask = templates_mask
     )
 
+def test_coords():
+    model = Alphafold2(
+        dim = 256,
+        depth = 2,
+        heads = 8,
+        dim_head = 64,
+        predict_coords = True
+    )
+
+    seq = torch.randint(0, 21, (2, 16))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 32))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+
+    assert coords.shape == (2, 16, 3), 'must output coordinates'
+
 def test_reversible():
     model = Alphafold2(
         dim = 256,

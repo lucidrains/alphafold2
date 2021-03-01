@@ -8,7 +8,7 @@ from math import sqrt
 from einops import rearrange, repeat, reduce
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.utils import get_bucketed_distance_matrix
+from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling
 from alphafold2_pytorch.reversible import ReversibleSequence
 
 from se3_transformer_pytorch import SE3Transformer
@@ -345,7 +345,15 @@ class Alphafold2(nn.Module):
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
-        template_attn_depth = 2
+        template_attn_depth = 2,
+        predict_coords = False, # structure module related keyword arguments below
+        mds_iters = 2,
+        structure_module_dim = 4,
+        structure_module_depth = 4,
+        structure_module_heads = 1,
+        structure_module_dim_head = 16,
+        structure_module_refinement_iters = 2,
+        structure_module_knn = 8
     ):
         super().__init__()
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
@@ -429,11 +437,31 @@ class Alphafold2(nn.Module):
         trunk_class = SequentialSequence if not reversible else ReversibleSequence
         self.net = trunk_class(layers)
 
-        # to output
+        # to distogram output
 
         self.to_distogram_logits = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+        )
+
+        # to coordinate output
+
+        self.predict_coords = predict_coords
+        self.mds_iters = mds_iters
+        self.structure_module_refinement_iters = structure_module_refinement_iters
+
+        self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
+        self.to_refined_coords_delta = nn.Linear(structure_module_dim, 1)
+
+        self.structure_module = SE3Transformer(
+            dim = structure_module_dim,
+            depth = structure_module_depth,
+            input_degrees = 1,
+            num_degrees = 3,
+            output_degrees = 2,
+            heads = structure_module_heads,
+            num_neighbors = structure_module_knn,
+            differentiable_coors = True
         )
 
     def forward(
@@ -598,12 +626,40 @@ class Alphafold2(nn.Module):
             msa_mask = msa_mask
         )
 
-        # structural refinement
-
-        ### TODO - use SE3Transformer here, as details emerge about the iterative refinement, fill-in here
-
-        # final out, do alphafold1's distogram for now
-
         x = rearrange(x, 'b (h w) d -> b h w d', h = n)
         x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        return self.to_distogram_logits(x)
+        distogram_logits = self.to_distogram_logits(x)
+
+        if not self.predict_coords:
+            return distogram_logits
+
+        # structural refinement
+
+        coords = []
+        for distogram in distogram_logits:
+            distances, weights = center_distogram_torch(distogram)
+
+            coords_3d, _ = MDScaling(distances, 
+                weights = weights,
+                iters = 5, 
+                fix_mirror = 0
+            )
+
+            coords_3d = rearrange(coords_3d, 'b c n -> b n c')
+            coords.append(coords_3d)
+
+        coords = torch.cat(coords, dim = 0)
+        x = self.structure_module_embeds(seq)
+
+        for _ in range(self.structure_module_refinement_iters):
+            output = self.structure_module(x, coords, mask = mask)
+            x, refined_coords = output['0'], output['1']
+
+            refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
+            refined_coords = self.to_refined_coords_delta(refined_coords)
+            refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
+
+            x = rearrange(x, 'b n c () -> b n c')
+            coords = coords + refined_coords
+
+        return coords

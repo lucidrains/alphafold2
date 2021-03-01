@@ -294,9 +294,10 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist 
+    diag_mask = torch.eye(shape[-2], device = device).bool()
     diag = np.arange(shape[-2])
     central = expand_dims_to(central, 3 - len(central.shape))
-    central[:, diag, diag] = 0.
+    central.masked_fill_(diag_mask[None, ...], 0.)
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
@@ -304,7 +305,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
 
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
-        dispersion = torch.zeros_like(central, device=central.device)
+        dispersion = torch.zeros_like(central, device=device)
     # rescale to 0-1. lower std / var  --> weight=1. set potential nan's to 0
     weights = mask / (1+dispersion)
     weights[weights != weights] = 0.
@@ -339,10 +340,15 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2)
         stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
-        dist_mat[dist_mat == 0] = 1e-7
+        mask = dist_mat == 0
+        dist_mat.masked_fill_(mask, 1e-7)
+
         ratio = weights * (pre_dist_mat / dist_mat)
         B = -ratio
-        B[:, np.arange(N), np.arange(N)] += ratio.sum(dim=-1)
+
+        old_B = B[:, np.arange(N), np.arange(N)].clone()
+        B[:, np.arange(N), np.arange(N)] = old_B + ratio.sum(dim=-1)
+
         # update
         coords = (1. / N * torch.matmul(B, best_3d_coords))
         dis = torch.norm(coords, dim=(-1, -2))
