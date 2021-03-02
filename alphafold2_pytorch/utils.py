@@ -319,7 +319,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         * best_3d_coords: (3 x N)
         * historic_stress 
     """
-    device = pre_dist_mat.device
+    device, dtype = pre_dist_mat.device, pre_dist_mat.type()
 
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
@@ -333,7 +333,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     his = []
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device)
-    best_3d_coords = 2*torch.rand(batch, N, 3, device = device) - 1
+    best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
