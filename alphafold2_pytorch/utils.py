@@ -294,9 +294,9 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist - don't do masked filling to avoid inplace errors
-    diag_mask = ( torch.ones(shape[-2], shape[-2], device=device) - torch.eye(shape[-2], device = device) ).unsqueeze(0)
+    diag_idxs = np.arange(shape[-2])
     central   = expand_dims_to(central, 3 - len(central.shape))
-    central  *= diag_mask.type(central.type())
+    central[:, diag_idxs, diag_idxs]  *= 0.
     # provide weights
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
@@ -329,6 +329,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
 
     # start
     batch, N, _ = pre_dist_mat.shape
+    diag_idxs = np.arange(N)
     his = []
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device)
@@ -336,17 +337,13 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
-        dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2)
+        dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2).clone()
         stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
-        mask = dist_mat == 0
-        dist_mat.masked_fill_(mask, 1e-7)
-
+        dist_mat[ dist_mat == 0 ] = 1e-7
         ratio = weights * (pre_dist_mat / dist_mat)
         B = -ratio
-
-        old_B = B[:, np.arange(N), np.arange(N)].clone()
-        B[:, np.arange(N), np.arange(N)] = old_B + ratio.sum(dim=-1)
+        B[:, diag_idxs, diag_idxs] += ratio.sum(dim=-1)
 
         # update
         coords = (1. / N * torch.matmul(B, best_3d_coords))
