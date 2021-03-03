@@ -96,6 +96,31 @@ def test_coords():
 
     assert coords.shape == (2, 16, 3), 'must output coordinates'
 
+def test_coords_backwards():
+    model = Alphafold2(
+        dim = 256,
+        depth = 2,
+        heads = 8,
+        dim_head = 64,
+        predict_coords = True
+    )
+
+    seq = torch.randint(0, 21, (2, 16))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 32))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+
+    coords.sum().backwards()
+    assert True, 'must be able to go backwards through MDS and center distogram'
+
 def test_reversible():
     model = Alphafold2(
         dim = 256,
