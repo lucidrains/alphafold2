@@ -84,6 +84,48 @@ def invoke_torch_or_numpy(torch_fn, numpy_fn):
         return inner
     return outer
 
+
+# preprocess data
+
+def get_atom_ids_dict():
+    """ Get's a dict mapping each atom to a token. """
+    ids = set(["", "N", "CA", "C", "O"])
+
+    for k,v in SC_BUILD_INFO.items():
+        for name in v["atom-names"]:
+            ids.add(name)
+            
+    return {k: i for i,k in enumerate(sorted(ids))}
+
+def make_cloud_mask(aa):
+    """ relevent points will be 1. paddings will be 0. """
+    mask = np.zeros(14)
+    # early stop if padding token
+    if aa == "_":
+        return mask
+    # get num of atoms in aa
+    n_atoms = 4+len( SC_BUILD_INFO[aa]["atom-names"] )
+    mask[:n_atoms] = 1
+    return mask
+
+def make_atom_id_embedds(k, atom_ids):
+    """ Return the tokens for each atom in the aa. """
+    mask = np.zeros(14)
+    # early stop if padding token
+    if aa == "_":
+        return mask
+    # get atom id
+    atom_list = ["N", "CA", "C", "O"] + SC_BUILD_INFO[k]["atom-names"]
+    for i,atom in enumerate(atom_list):
+        mask[i] = ATOM_IDS[atom]
+    return mask
+
+
+ATOM_IDS = get_atom_ids_dict()
+CUSTOM_INFO = {k: {"cloud_mask": make_cloud_mask(k),
+                   "atom_id_embedd": make_atom_id_embedds(k, atom_ids=ATOM_IDS),
+                  } for k in "ARNDCQEGHILKMFPSTWYV_"}
+
 # common utils
 
 # parsing to pdb for easier visualization - other example from sidechainnet is:
@@ -167,19 +209,21 @@ def scn_cloud_mask(scn_seq, boolean=True):
         * boolean: whether to return as array of idxs or boolean values
         Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask 
     """
-    # scaffolds 
-    mask = torch.zeros(*scn_seq.shape, NUM_COORDS_PER_RES, device=scn_seq.device)
-    # fill 
-    for n, seq in enumerate(scn_seq.cpu().numpy()):
-        for i,aa in enumerate(seq):
-            # get num of atom positions - backbone is 4: ...N-C-C(=O)...
-            n_atoms = 4+len( SC_BUILD_INFO[VOCAB.int2chars(aa)]["atom-names"] )
-            mask[n, i, :n_atoms] = 1
+    device = scn_seq.device
+    batch_mask = []
+    # do loop in cpu
+    scn_seq = scn_seq.cpu()
+    for i, seq in enumerate(scn_seq):
+        # get masks for each prot (points for each aa)
+        batch_mask.append( torch.tensor([SUPREME_INFO[aa]['cloud_mask'] \
+                                         for aa in seq]).bool().to(device).unsqueeze(0) )
+    # concat in last dim
+    batch_mask = torch.cat(batch_mask, dim=0)
     if boolean:
         return mask.bool()
     return mask.nonzero()
 
-def scn_backbone_mask(scn_seq, boolean=True, l_aa=NUM_COORDS_PER_RES):
+def scn_backbone_mask(scn_seq, boolean=True):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
         * scn_seq: sequence(s) as provided by Sidechainnet package (int tensor/s)
@@ -199,6 +243,22 @@ def scn_backbone_mask(scn_seq, boolean=True, l_aa=NUM_COORDS_PER_RES):
     if boolean:
         return N_mask, CA_mask, C_mask
     return N_mask.nonzero(), CA_mask.nonzero(), C_mask.nonzero()
+
+def scn_atom_embedd(scn_seq):
+    """ Returns the token for each atom in the aa. 
+        Inputs: 
+        * scn_seq: sequence(s) as provided by Sidechainnet package (int tensor/s)
+    """
+    device = scn_seq.device
+    batch_tokens = []
+    # do loop in cpu
+    scn_seq = scn_seq.cpu()
+    for i,seq in enumerate(scn_seq):
+        batch_tokens.append( torch.tensor([SUPREME_INFO[k]["atom_id_embedd"] \
+                                           for k in seq]).long().to(device).unsqueeze(0) )
+    batch_tokens = torch.cat(batch_tokens, dim=0)
+    return batch_tokens
+
 
 def nerf_torch(a, b, c, l, theta, chi):
     """ Custom Natural extension of Reference Frame. 
@@ -228,25 +288,34 @@ def nerf_torch(a, b, c, l, theta, chi):
     # extend base point, set length
     return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
 
-def sidechain_container(backbones, place_oxygen=False,
+def sidechain_container(backbones, cloud_mask, n_aa, place_oxygen=False,
                         n_atoms=NUM_COORDS_PER_RES, padding=GLOBAL_PAD_CHAR):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
         * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
                     Coords for (N-term, C-alpha, C-term) of every aa.
+        * cloud_mask: (batch, l, c) cloud mask from scn_cloud_mask`
+        * n_aa: int. number of points for each aa.
         * place_oxygen: whether to claculate the oxygen of the
                         carbonyl group via NeRF
         * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
         * padding: int. padding token. same as in sidechainnet: 0
         Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
     """
-    batch, length = backbones.shape[0], backbones.shape[1] // 3
-    new_coords = torch.ones(batch, length, NUM_COORDS_PER_RES, 3, device=backbones.device) * padding
-    new_coords[:, :, :3] = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
-    # set the rest of positions to c_alpha
-    new_coords[:, :, 3:] = repeat(new_coords[:, :, 2], 'b l d -> b l scn d', scn=11)
-    # hard-calculate oxygen position of carbonyl group
+    device = backbones.device
+    batch, length = backbones.shape[0], backbones.shape[1] // n_aa
+    # build scaffold from (N, CA, C, CB)
+    new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
+    predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
+    # set backbone positions
+    new_coords[:, :, :3] = predicted[:, :, :3]
+    # set rest of positions to c_alpha
+    new_coords[:, :, 3:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=11)
+    new_coords[torch.logical_not(cloud_mask)] = 0.
+    # overwrite cbeta
+    new_coords[:, :, 4] = predicted[:, :, 4]
+    # hard-calculate oxygen position of carbonyl group with parallel version of NERF
     if place_oxygen: 
         # build (=O) position of revery aa in each chain
         for s in range(batch):

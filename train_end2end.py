@@ -109,17 +109,15 @@ for _ in range(NUM_BATCHES):
         b, l = seq.shape
 
         # prepare data and mask labels
-
         seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE)
         # coords = rearrange(coords, 'b (l c) d -> b l c d', l = l) # no need to rearrange for now
         # mask the atoms and backbone positions for each residue
-        N_mask, CA_mask = scn_backbone_mask(seq, boolean = True, l_aa = 3) # NUM_COORDS_PER_RES
-        cloud_mask = scn_cloud_mask(seq, boolean = False, current_mask = mask)
-        # flatten last dims for point cloud masking and chain masking (cloud and sidechainnet). 
-        chain_mask = (mask * cloud_mask)
-        cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l).bool()
-        chain_mask = rearrange(chain_mask, 'b l c -> b (l c)', l = l).bool()
-        chain_mask = chain_mask[cloud_mask]
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
+        cloud_mask = scn_cloud_mask(seq, boolean = False)
+        flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+        # chain_mask is all atoms that will be backpropped thru -> existing + trainable 
+        chain_mask = (mask * cloud_mask)[cloud_mask]
+        flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
         # sequence embedding (msa / esm / attn / or nothing)
         msa, embedds = None
@@ -158,20 +156,24 @@ for _ in range(NUM_BATCHES):
             iters = 200, 
             fix_mirror = 5, 
             N_mask = N_mask,
-            CA_mask = CA_mask
+            CA_mask = CA_mask,
+            C_mask = C_mask
         ) 
 
         # build SC container. set SC points to CA and optionally place carbonyl O
-        proto_sidechain = sidechain_container(seq, coords_3d, place_oxygen=False)
-        proto_sidechain = rearrange(sidechain_3d, 'b l c d -> b (l c) d')
+        proto_sidechain = sidechain_container(coords_3d, n_aa=batch,
+                                              cloud_mask=cloud_mask, place_oxygen=False)
         
         ## refine
         # sample tokens for now based on indices
-        atom_tokens = repeat(torch.arange(cloud_mask.shape[-1]), 'l -> b l', b=seq.shape[0]) % NUM_COORDS_PER_RES
-        refined = refiner(atom_tokens[cloud_mask], proto_sidechain[cloud_mask], mask=chain_mask, return_type=1) # (batch, N, 3)
+        atom_tokens = scn_atom_embedd(seq[..., 0]) # undo the *batch repeat by selecting 0
+        refined = refiner(atom_tokens[cloud_mask],
+                          proto_sidechain[cloud_mask],
+                          mask=chain_mask,
+                          return_type=1) # (batch, N, 3)
 
         # rotate / align
-        coords_aligned, labels_aligned = Kabsch(refined, coords[cloud_mask])
+        coords_aligned, labels_aligned = Kabsch(refined, coords[flat_cloud_mask])
 
         # save pdb files for visualization
         if TO_PDB: 
@@ -189,8 +191,8 @@ for _ in range(NUM_BATCHES):
             sb_target.to_pdb(SAVE_DIR+"target.pdb")
 
         # loss - RMSE + distogram_dispersion
-        loss = torch.sqrt(criterion(coords_aligned[chain_mask], labels_aligned[chain_mask])) + \
-               dispersion_weight * torch.norm( (1/weights)-1 )
+        loss = torch.sqrt(criterion(coords_aligned[flat_chain_mask], labels_aligned[flat_chain_mask])) + \
+                          dispersion_weight * torch.norm( (1/weights)-1 )
 
         loss.backward()
 
