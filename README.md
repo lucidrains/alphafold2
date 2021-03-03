@@ -46,6 +46,7 @@ distogram = model(
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
 
+Update - Heard from Victor, author of <a href="https://github.com/lucidrains/egnn-pytorch">EGNN</a>, that his approach may also work for this problem. Will integrate E(n)-transformer into the repository by end of week.
 
 ```python
 import torch

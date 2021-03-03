@@ -301,7 +301,6 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     if wide == "var":
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
     elif wide == "std":
-
         dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
     else:
         dispersion = torch.zeros_like(central, device=device)
