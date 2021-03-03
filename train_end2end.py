@@ -26,6 +26,7 @@ GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
+TO_PDB = False
 
 # set device
 
@@ -113,7 +114,7 @@ for _ in range(NUM_BATCHES):
         # mask the atoms and backbone positions for each residue
         N_mask, CA_mask = scn_backbone_mask(seq, boolean = True, l_aa = 3) # NUM_COORDS_PER_RES
         cloud_mask = scn_cloud_mask(seq, boolean = False, current_mask = mask)
-        # flatten last dims for point cloud maskinga and chain masking (cloud and sidechainnet). 
+        # flatten last dims for point cloud masking and chain masking (cloud and sidechainnet). 
         chain_mask = (mask * cloud_mask)
         cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)', l = l).bool()
         chain_mask = rearrange(chain_mask, 'b l c -> b (l c)', l = l).bool()
@@ -170,6 +171,21 @@ for _ in range(NUM_BATCHES):
 
         # rotate / align
         coords_aligned, labels_aligned = Kabsch(refined, coords[cloud_mask])
+
+        # save pdb files for visualization
+        if TO_PDB: 
+            # idx from batch to save prot and label
+            idx = 0
+            # create wrappers to 0
+            wrapper_pred = rearrange( torch.zeros_like( coords[idx] ), '(l c) d -> l c d')
+            wrapper_target = wrapper_pred.clone()
+            wrapper_pred[cloud_mask] = coords_aligned[idx]
+            wrapper_target[cloud_mask] = labels_aligned[idx]
+            # build structures and save
+            sb_pred = scn.StructureBuilder( seq[idx, :, 0], crd=wrapper_pred ) 
+            sb_target = scn.StructureBuilder( seq[idx, :, 0], crd=wrapper_target ) 
+            sb_pred.to_pdb(SAVE_DIR+"pred.pdb")
+            sb_target.to_pdb(SAVE_DIR+"target.pdb")
 
         # loss - RMSE + distogram_dispersion
         loss = torch.sqrt(criterion(coords_aligned[chain_mask], labels_aligned[chain_mask])) + \
