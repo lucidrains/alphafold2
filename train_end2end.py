@@ -27,6 +27,7 @@ LEARNING_RATE = 3e-4
 IGNORE_INDEX = -100
 THRESHOLD_LENGTH = 250
 TO_PDB = False
+SAVE_DIR = ""
 
 # set device
 
@@ -133,7 +134,7 @@ for _ in range(NUM_BATCHES):
             pass
 
         # elongate inputs by a factor of 3 : N-term, C-alpha C-term
-        back = 3
+        back = 4
         seq  = repeat(seq, 'b l -> b l back', back = back)
         seq  = rearrange(seq, 'b l back -> b (l back)')
         seq_pos = repeat(torch.arange(seq.shape[-1]) % back, 'lback -> b lback', b=seq.shape[0])

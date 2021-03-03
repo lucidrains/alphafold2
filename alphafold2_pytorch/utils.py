@@ -182,20 +182,23 @@ def scn_cloud_mask(scn_seq, boolean=True):
 def scn_backbone_mask(scn_seq, boolean=True, l_aa=NUM_COORDS_PER_RES):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
-        * scn_seq: sequence as provided by Sidechainnet package
+        * scn_seq: sequence(s) as provided by Sidechainnet package (int tensor/s)
         * bool: whether to return as array of idxs or boolean values
-        Outputs: (N_mask, CA_mask)
+        Outputs: (N_mask, CA_mask, C_mask)
     """
-    lengths = torch.arange(scn_seq.shape[-1]*l_aa)
-    # repeat if needed:
-    if len(lengths.shape) == 2:
-        lengths = repeat(lengths, 'l -> b l', b=scn_seq.shape[0])
+    wrapper = torch.zeros(*scn_seq.shape, 14)
     # N is the first atom in every AA. CA is the 2nd.
-    N_mask  = lengths%l_aa == 0
-    CA_mask = lengths%l_aa == 1
+    wrapper[:, 0] = 1
+    wrapper[:, 1] = 2
+    wrapper[:, 2] = 3
+    wrapper = rearrange(wrapper, '... l c -> ... (l c)')
+    # find idxs
+    N_mask  = wrapper == 1
+    CA_mask = wrapper == 2
+    C_mask  = wrapper == 3 
     if boolean:
-        return N_mask, CA_mask
-    return N_mask.nonzero(), CA_mask.nonzero()
+        return N_mask, CA_mask, C_mask
+    return N_mask.nonzero(), CA_mask.nonzero(), C_mask.nonzero()
 
 def nerf_torch(a, b, c, l, theta, chi):
     """ Custom Natural extension of Reference Frame. 
