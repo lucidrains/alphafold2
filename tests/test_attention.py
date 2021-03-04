@@ -78,7 +78,8 @@ def test_coords():
         depth = 2,
         heads = 8,
         dim_head = 64,
-        predict_coords = True
+        predict_coords = True,
+        num_backbone_atoms = 3
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -94,7 +95,7 @@ def test_coords():
         msa_mask = msa_mask
     )
 
-    assert coords.shape == (2, 16, 3), 'must output coordinates'
+    assert coords.shape == (2, 16 * 3, 3), 'must output coordinates'
 
 def test_coords_backwards():
     model = Alphafold2(
@@ -102,7 +103,8 @@ def test_coords_backwards():
         depth = 2,
         heads = 8,
         dim_head = 64,
-        predict_coords = True
+        predict_coords = True,
+        num_backbone_atoms = 3
     )
 
     seq = torch.randint(0, 21, (2, 16))
