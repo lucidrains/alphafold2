@@ -310,16 +310,13 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     batch, length = backbones.shape[0], backbones.shape[1] // n_aa
     # build scaffold from (N, CA, C, CB)
     new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
-    print(new_coords.shape)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
     new_coords[:, :, :3] = predicted[:, :, :3]
-    # set rest of positions to c_alpha
-    new_coords[:, :, 3:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=11)
+    # set rest of positions to c_beta
+    new_coords[:, :, 4:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=11)
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
-    # overwrite cbeta
-    new_coords[:, :, 4] = predicted[:, :, 3]
     # hard-calculate oxygen position of carbonyl group with parallel version of NERF
     if place_oxygen: 
         # build (=O) position of revery aa in each chain
@@ -337,6 +334,10 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
                                              new_coords[:, :, 1], 
                                              new_coords[:, :, 2], 
                                              bond_lens, bond_angs, psis + correction)
+    else: 
+        # init oxygen to carbonyl
+        new_coords[:, :, 3] = predicted[:, :, 2]
+
     return new_coords
 
 
