@@ -20,6 +20,7 @@ setup(
     'numpy',
     'torch>=1.6',
     'mdtraj>=1.8',
+    'tqdm',
     'se3-transformer-pytorch'
   ],
   setup_requires=[
