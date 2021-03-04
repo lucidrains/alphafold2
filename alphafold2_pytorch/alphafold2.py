@@ -637,20 +637,14 @@ class Alphafold2(nn.Module):
 
         # structural refinement
 
-        coords = []
-        for distogram in distogram_logits:
-            distances, weights = center_distogram_torch(distogram)
-
-            coords_3d, _ = MDScaling(distances, 
-                weights = weights,
-                iters = 5, 
-                fix_mirror = 0
-            )
-
-            coords_3d = rearrange(coords_3d, 'b c n -> b n c')
-            coords.append(coords_3d)
-
-        coords = torch.cat(coords, dim = 0)
+        distances, weights = center_distogram_torch(distogram_logits)
+        coords_3d, _ = MDScaling(distances, 
+            weights = weights,
+            iters = 5, 
+            fix_mirror = 0
+        )
+        coords = rearrange(coords_3d, 'b c n -> b n c')
+        
         x = self.structure_module_embeds(seq)
 
         original_dtype = coords.dtype

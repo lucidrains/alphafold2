@@ -12,7 +12,7 @@ def test_masks():
     # cloud point mask - can't test bc it needs sidechainnet installed
     # cloud_masks = scn_cloud_mask(seqs, boolean=True)
     # atom masking
-    N_mask, CA_mask = scn_backbone_mask(seqs, boolean = True, l_aa = 3)
+    N_mask, CA_mask, C_mask = scn_backbone_mask(seqs, boolean = True)
     assert True
 
 def test_mds_and_mirrors():
@@ -63,8 +63,8 @@ def test_nerf_and_dihedral():
     assert get_dihedral_torch(a, b, c, d).item() == chi
 
 def test_sidechain_container():
-    bb = torch.randn(2, 137*3, 3)
-    proto_3d = sidechain_container(bb, place_oxygen=True)
+    bb = torch.randn(2, 137*4, 3)
+    proto_3d = sidechain_container(bb, n_aa=4, place_oxygen=True)
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 def test_kabsch():
