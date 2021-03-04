@@ -215,7 +215,7 @@ def scn_cloud_mask(scn_seq, boolean=True):
     scn_seq = scn_seq.cpu()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([SUPREME_INFO[VOCAB(aa)]['cloud_mask'] \
+        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB(aa)]['cloud_mask'] \
                                          for aa in seq]).bool().to(device).unsqueeze(0) )
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
@@ -254,7 +254,7 @@ def scn_atom_embedd(scn_seq):
     # do loop in cpu
     scn_seq = scn_seq.cpu()
     for i,seq in enumerate(scn_seq):
-        batch_tokens.append( torch.tensor([SUPREME_INFO[k]["atom_id_embedd"] \
+        batch_tokens.append( torch.tensor([CUSTOM_INFO[k]["atom_id_embedd"] \
                                            for k in seq]).long().to(device).unsqueeze(0) )
     batch_tokens = torch.cat(batch_tokens, dim=0)
     return batch_tokens
