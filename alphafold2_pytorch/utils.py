@@ -6,7 +6,7 @@ from functools import wraps
 from einops import rearrange, repeat
 
 # bio
-import mdtraj
+
 try:
     from sidechainnet.utils.sequence import ProteinVocabulary, ONE_TO_THREE_LETTER_MAP
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
@@ -149,6 +149,7 @@ def clean_pdb(name, route=None, chain_num=None):
         * chain_num: int. index of chain to select (1-indexed as pdb files)
         Output: route of destin file.
     """
+    import mdtraj
     destin = route if route is not None else name
     # read input
     raw_prot = mdtraj.load_pdb(name)
@@ -180,6 +181,7 @@ def custom2pdb(coords, proteinnet_id, route):
         * route: str. destin route.
         Output: tuple of routes: (original, generated) for the structures. 
     """
+    import mdtraj
     # convert to numpy
     if isinstance(coords, torch.Tensor):
         coords = coords.detach().cpu().numpy()
