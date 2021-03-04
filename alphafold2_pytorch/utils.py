@@ -8,12 +8,12 @@ from einops import rearrange, repeat
 # bio
 import mdtraj
 try:
-    from sidechainnet.utils.sequence import ProteinVocabulary as VOCAB
+    from sidechainnet.utils.sequence import ProteinVocabulary, ONE_TO_THREE_LETTER_MAP
     from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
     from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
     from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
     # build vocablary
-    VOCAB = VOCAB()
+    VOCAB = ProteinVocabulary()
 except:
     NUM_COORDS_PER_RES = 14
     GLOBAL_PAD_CHAR = 0
@@ -104,18 +104,18 @@ def make_cloud_mask(aa):
     if aa == "_":
         return mask
     # get num of atoms in aa
-    n_atoms = 4+len( SC_BUILD_INFO[aa]["atom-names"] )
+    n_atoms = 4+len( SC_BUILD_INFO[ ONE_TO_THREE_LETTER_MAP[aa] ]["atom-names"] )
     mask[:n_atoms] = 1
     return mask
 
-def make_atom_id_embedds(k, atom_ids):
+def make_atom_id_embedds(aa, atom_ids):
     """ Return the tokens for each atom in the aa. """
     mask = np.zeros(14)
     # early stop if padding token
     if aa == "_":
         return mask
     # get atom id
-    atom_list = ["N", "CA", "C", "O"] + SC_BUILD_INFO[k]["atom-names"]
+    atom_list = ["N", "CA", "C", "O"] + SC_BUILD_INFO[ ONE_TO_THREE_LETTER_MAP[aa] ]["atom-names"]
     for i,atom in enumerate(atom_list):
         mask[i] = ATOM_IDS[atom]
     return mask
@@ -215,7 +215,7 @@ def scn_cloud_mask(scn_seq, boolean=True):
     scn_seq = scn_seq.cpu()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([SUPREME_INFO[aa]['cloud_mask'] \
+        batch_mask.append( torch.tensor([SUPREME_INFO[VOCAB(aa)]['cloud_mask'] \
                                          for aa in seq]).bool().to(device).unsqueeze(0) )
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
@@ -538,7 +538,7 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
     c_alphas = pred_coords_[:, CA_mask.squeeze()]
     # select c_term auto if not passed
     if C_mask is not None: 
-        c_terms = pred_coords_[:, C_mask]
+        c_terms = pred_coords_[:, C_mask.squeeze()]
     else:
         c_terms  = pred_coords_[ :, torch.logical_not(torch.logical_or(N_mask,CA_mask)).squeeze() ]
     # compute phis for every pritein in the batch
@@ -716,12 +716,11 @@ def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
 
     # no need to caculate multiple mirrors - just correct Z axis
     phi_ratios = calc_phis_torch(preds, N_mask, CA_mask, C_mask, prop=True)
-    for i,pred in enumerate(preds):
-        # fix mirrors by (-1)*Z if more (+) than (-) phi angles
-        if phi_ratios < 0.5:
-            preds[i, -1] = (-1)*preds[i, -1]
-            if verbose == 2:
-                print("Corrected mirror in struct no.", i)
+    to_correct = torch.nonzero( (phi_ratios < 0.5) ).view(-1)
+    # fix mirrors by (-1)*Z if more (+) than (-) phi angles
+    preds[to_correct, -1] = (-1)*preds[to_correct, -1]
+    if verbose == 2:
+        print("Corrected mirror idxs:", to_correct)
             
     return preds, stresses
 

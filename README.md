@@ -86,7 +86,7 @@ coords = model(
 - [ ] determine whether the lightweight E(n)-Transformer can be a replacement, check out equivariant attention section below
 
 - [ ] there is a bug with inplace operations for center distogram and MDS, when trying to backpropagate through the operations
-- [ ] see if MDS can be done in batches, although without batches is fine too, as there is no batch norm in the system, and it is likely to be trained batch size of 1 at a time
+- [x] see if MDS can be done in batches, although without batches is fine too, as there is no batch norm in the system, and it is likely to be trained batch size of 1 at a time
 
 ## Sparse Attention
 
