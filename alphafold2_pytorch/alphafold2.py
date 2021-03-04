@@ -662,7 +662,11 @@ class Alphafold2(nn.Module):
 
         if self.num_backbone_atoms == 3:
             N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
-            mask = repeat(mask, 'b n -> b (l n)', l = 3)
+
+            cloud_mask = scn_cloud_mask(seq, boolean = False)
+            flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+            chain_mask = (mask * cloud_mask)[cloud_mask]
+            mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
         # structural refinement
 
