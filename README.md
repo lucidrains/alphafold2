@@ -364,3 +364,14 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
     primaryClass = {cs.LG}
 }
 ```
+
+```bibtex
+@misc{satorras2021en,
+    title   = {E(n) Equivariant Graph Neural Networks}, 
+    author  = {Victor Garcia Satorras and Emiel Hoogeboom and Max Welling},
+    year    = {2021},
+    eprint  = {2102.09844},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.LG}
+}
+```
