@@ -288,15 +288,16 @@ def nerf_torch(a, b, c, l, theta, chi):
     # extend base point, set length
     return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
 
-def sidechain_container(backbones, cloud_mask, n_aa, place_oxygen=False,
+def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
                         n_atoms=NUM_COORDS_PER_RES, padding=GLOBAL_PAD_CHAR):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
         * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
                     Coords for (N-term, C-alpha, C-term) of every aa.
-        * cloud_mask: (batch, l, c) cloud mask from scn_cloud_mask`
-        * n_aa: int. number of points for each aa.
+        * n_aa: int. number of points for each aa in the backbones.
+        * cloud_mask: (batch, l, c). optional. cloud mask from scn_cloud_mask`.
+                      returns point outside to 0. if passed, else c_alpha
         * place_oxygen: whether to claculate the oxygen of the
                         carbonyl group via NeRF
         * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
@@ -307,14 +308,16 @@ def sidechain_container(backbones, cloud_mask, n_aa, place_oxygen=False,
     batch, length = backbones.shape[0], backbones.shape[1] // n_aa
     # build scaffold from (N, CA, C, CB)
     new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
+    print(new_coords.shape)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
     new_coords[:, :, :3] = predicted[:, :, :3]
     # set rest of positions to c_alpha
     new_coords[:, :, 3:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=11)
-    new_coords[torch.logical_not(cloud_mask)] = 0.
+    if cloud_mask is not None:
+        new_coords[torch.logical_not(cloud_mask)] = 0.
     # overwrite cbeta
-    new_coords[:, :, 4] = predicted[:, :, 4]
+    new_coords[:, :, 4] = predicted[:, :, 3]
     # hard-calculate oxygen position of carbonyl group with parallel version of NERF
     if place_oxygen: 
         # build (=O) position of revery aa in each chain
@@ -385,10 +388,10 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
 
 def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
-        Assumes (for now) distrogram is (N x N) and symmetric
+        Assumes (for now) distogram is (N x N) and symmetric
         Outs: 
-        * best_3d_coords: (3 x N)
-        * historic_stress 
+        * best_3d_coords: (batch x 3 x N)
+        * historic_stresses: (batch x steps)
     """
     device, dtype = pre_dist_mat.device, pre_dist_mat.type()
 

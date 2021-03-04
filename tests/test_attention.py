@@ -118,7 +118,7 @@ def test_coords_backwards():
         msa_mask = msa_mask
     )
 
-    coords.sum().backwards()
+    coords.sum().backward()
     assert True, 'must be able to go backwards through MDS and center distogram'
 
 def test_reversible():
