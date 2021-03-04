@@ -72,13 +72,12 @@ msa = torch.randint(0, 21, (2, 5, 32)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
-coords = model(
+coords, atom_mask = model(
     seq,
     msa,
     mask = mask,
     msa_mask = msa_mask
-) # (2, 64, 3)
-
+) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
 
 ## Sparse Attention

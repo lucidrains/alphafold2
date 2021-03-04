@@ -88,7 +88,7 @@ def test_coords_se3():
     msa = torch.randint(0, 21, (2, 5, 32))
     msa_mask = torch.ones_like(msa).bool()
 
-    coords = model(
+    coords, _ = model(
         seq,
         msa,
         mask = mask,
@@ -113,7 +113,7 @@ def test_coords_se3_backwards():
     msa = torch.randint(0, 21, (2, 5, 32))
     msa_mask = torch.ones_like(msa).bool()
 
-    coords = model(
+    coords, _ = model(
         seq,
         msa,
         mask = mask,
@@ -140,7 +140,7 @@ def test_coords_En():
     msa = torch.randint(0, 21, (2, 5, 32))
     msa_mask = torch.ones_like(msa).bool()
 
-    coords = model(
+    coords, _ = model(
         seq,
         msa,
         mask = mask,
@@ -166,7 +166,7 @@ def test_coords_En_backwards():
     msa = torch.randint(0, 21, (2, 5, 32))
     msa_mask = torch.ones_like(msa).bool()
 
-    coords = model(
+    coords, _ = model(
         seq,
         msa,
         mask = mask,
