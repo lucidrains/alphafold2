@@ -6,13 +6,17 @@ import torch.nn.functional as F
 
 from math import sqrt
 from einops import rearrange, repeat, reduce
+from einops.layers.torch import Rearrange
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling
+from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling, scn_backbone_mask, scn_cloud_mask
 from alphafold2_pytorch.reversible import ReversibleSequence
+
+# structure module
 
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype
+from en_transformer import EnTransformer
 
 # helpers
 
@@ -347,8 +351,9 @@ class Alphafold2(nn.Module):
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
-        predict_coords = False, # structure module related keyword arguments below
-        mds_iters = 2,
+        num_backbone_atoms = 1,      # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
+        predict_coords = False,      # structure module related keyword arguments below
+        mds_iters = 5,
         structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
@@ -357,6 +362,8 @@ class Alphafold2(nn.Module):
         structure_module_knn = 8
     ):
         super().__init__()
+        assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
+
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
 
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -440,10 +447,24 @@ class Alphafold2(nn.Module):
 
         # to distogram output
 
-        self.to_distogram_logits = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
-        )
+        self.num_backbone_atoms = num_backbone_atoms
+
+        if num_backbone_atoms > 1:
+            self.backbone_pos_emb = nn.Parameter(torch.randn(num_backbone_atoms, structure_module_dim))
+
+            self.to_distogram_logits = nn.Sequential(
+                nn.LayerNorm(dim),
+                nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
+                Rearrange('b h w c -> b c h w'),
+                nn.PixelShuffle(num_backbone_atoms),
+                Rearrange('b c h w -> b h w c'),
+                nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+            )
+        else:
+            self.to_distogram_logits = nn.Sequential(
+                nn.LayerNorm(dim),
+                nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+            )
 
         # to coordinate output
 
@@ -635,20 +656,35 @@ class Alphafold2(nn.Module):
         if not self.predict_coords:
             return distogram_logits
 
+        # prepare mask for backbone coordinates
+
+        assert self.num_backbone_atoms > 1, 'must constitute to at least 3 atomic coordinates for backbone'
+
+        if self.num_backbone_atoms == 3:
+            N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
+            mask = repeat(mask, 'b n -> b (l n)', l = 3)
+
         # structural refinement
 
         distances, weights = center_distogram_torch(distogram_logits)
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
-            iters = 5, 
-            fix_mirror = 0
+            iters = self.mds_iters,
+            fix_mirror = 0,
+            N_mask = N_mask,
+            CA_mask = CA_mask,
+            C_mask = C_mask
         )
+
         coords = rearrange(coords_3d, 'b c n -> b n c')
         
         x = self.structure_module_embeds(seq)
+        x = repeat(x, 'b n d -> b n l d', l = self.num_backbone_atoms)
+
+        x += rearrange(self.backbone_pos_emb, 'l d -> () () l d')
+        x = rearrange(x, 'b n l d -> b (n l) d')
 
         original_dtype = coords.dtype
-
         x, coords = map(lambda t: t.double(), (x, coords))
 
         with torch_default_dtype(torch.float64):

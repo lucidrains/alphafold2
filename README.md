@@ -58,6 +58,7 @@ model = Alphafold2(
     heads = 8,
     dim_head = 64,
     predict_coords = True,
+    num_backbone_atoms = 3,                 # C, Ca, N coordinates
     structure_module_dim = 4,               # se3 transformer dimension
     structure_module_depth = 1,             # depth
     structure_module_heads = 1,             # heads
@@ -82,8 +83,8 @@ coords = model(
 ### Todo
 
 - [ ] pass in the weighted average of the embeddings from the trunk into type-0 of structure module
-- [ ] use pixelshuffle to upsample by a factor of 3 to backbone C-alpha, C, N.
-- [ ] determine whether the lightweight E(n)-Transformer can be a replacement, check out equivariant attention section below
+- [x] use pixelshuffle to upsample by a factor of 3 to backbone C-alpha, C, N.
+- [x] determine whether the lightweight E(n)-Transformer can be a replacement, check out equivariant attention section below (answer is yes, we will be adding E(n)-Transformer)
 
 - [x] there is a bug with inplace operations for center distogram and MDS, when trying to backpropagate through the operations
 - [x] see if MDS can be done in batches, although without batches is fine too, as there is no batch norm in the system, and it is likely to be trained batch size of 1 at a time
