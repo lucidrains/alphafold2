@@ -493,6 +493,8 @@ class Alphafold2(nn.Module):
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
 
+        self.trunk_to_structure_dim = nn.Linear(dim, structure_module_dim)
+
         with torch_default_dtype(torch.float64):
             self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
 
@@ -677,9 +679,10 @@ class Alphafold2(nn.Module):
             msa_mask = msa_mask
         )
 
-        x = rearrange(x, 'b (h w) d -> b h w d', h = n)
-        x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        distogram_logits = self.to_distogram_logits(x)
+        trunk_embeds = rearrange(x, 'b (h w) d -> b h w d', h = n)
+
+        trunk_embeds = (trunk_embeds + rearrange(trunk_embeds, 'b i j d -> b j i d')) * 0.5  # symmetrize
+        distogram_logits = self.to_distogram_logits(trunk_embeds)
 
         if not self.predict_coords:
             return distogram_logits
@@ -706,7 +709,9 @@ class Alphafold2(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         
-        x = self.structure_module_embeds(seq)
+        trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
+        x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
+        x += self.structure_module_embeds(seq)
         x = repeat(x, 'b n d -> b n l d', l = self.num_backbone_atoms)
 
         x += rearrange(self.backbone_pos_emb, 'l d -> () () l d')

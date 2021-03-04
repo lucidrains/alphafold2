@@ -81,10 +81,6 @@ coords = model(
 
 ```
 
-### Todo
-
-- [ ] pass in the weighted average of the embeddings from the trunk into type-0 of structure module
-
 ## Sparse Attention
 
 You can train with Microsoft Deepspeed's <a href="https://www.deepspeed.ai/news/2020/09/08/sparse-attention.html">Sparse Attention</a>, but you will have to endure the installation process. It is two-steps.
