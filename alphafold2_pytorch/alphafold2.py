@@ -734,6 +734,4 @@ class Alphafold2(nn.Module):
                 x, coords = self.structure_module(x, coords, mask = mask)
 
         coords.type(original_dtype)
-        return coords, mask
-
-
+        return coords

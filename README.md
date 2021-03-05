@@ -72,7 +72,7 @@ msa = torch.randint(0, 21, (2, 5, 32)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
-coords, atom_mask = model(
+coords = model(
     seq,
     msa,
     mask = mask,
