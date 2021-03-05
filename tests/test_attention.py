@@ -1,5 +1,6 @@
 import torch
 from alphafold2_pytorch.alphafold2 import Alphafold2
+from alphafold2_pytorch.utils import *
 
 def test_main():
     model = Alphafold2(
@@ -95,7 +96,7 @@ def test_coords_se3():
         msa_mask = msa_mask
     )
 
-    assert coords.shape == (2, 16 * 3, 3), 'must output coordinates'
+    assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
 
 def test_coords_se3_backwards():
     model = Alphafold2(
@@ -146,8 +147,19 @@ def test_coords_En():
         mask = mask,
         msa_mask = msa_mask
     )
+    # get masks : cloud is all points in prot. chain is all for which we have labels
+    cloud_mask = scn_cloud_mask(seq)
+    cloud_mask = scn_cloud_mask(seq, boolean = True)
+    flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+    chain_mask = (mask.unsqueeze(-1) * cloud_mask)
+    flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-    assert coords.shape == (2, 16 * 3, 3), 'must output coordinates'
+    # put in sidechainnet format
+    wrapper = torch.zeros(*cloud_mask.shape, 3).to(coords.device).type(coords.type())
+    wrapper[cloud_mask] = coords[flat_cloud_mask]
+
+    assert wrapper[chain_mask].shape == coords[flat_chain_mask].shape, 'must output coordinates'
+
 
 def test_coords_En_backwards():
     model = Alphafold2(
