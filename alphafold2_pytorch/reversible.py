@@ -74,7 +74,6 @@ class ReversibleSelfAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            print(x2.shape, seq_shape)
             y1 = x1 + self.f(x2, seq_shape, record_rng = record_rng, mask = mask, )
             y2 = x2 + self.g(y1, record_rng = record_rng)
             n1 = m1 + self.j(m2, msa_shape, record_rng = record_rng, mask = msa_mask)

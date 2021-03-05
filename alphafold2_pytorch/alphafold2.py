@@ -291,6 +291,40 @@ class AxialAttention(nn.Module):
         out = w_out + h_out
         return rearrange(out, 'b h w d -> b (h w) d')
 
+# template module helpers and classes
+
+class SE3TemplateEmbedder(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.net = SE3Transformer(*args, **kwargs)
+        self.sidechains_proj = nn.Parameter(torch.randn(1, kwargs['dim']))
+
+    def forward(
+        self,
+        t_seq,
+        templates_sidechains,
+        templates_coors,
+        mask = None
+    ):
+        shape = t_seq.shape
+        t_seq = rearrange(t_seq, 'b t n d-> (b t) n d ()')
+
+        templates_sidechains = rearrange(templates_sidechains, 'b t n m -> (b t) n () m')
+        templates_sidechains = einsum('b n d m, d e -> b n e m', templates_sidechains, self.sidechains_proj)
+        templates_coors = rearrange(templates_coors, 'b t n m -> (b t) n m')
+
+        mask = rearrange(mask, 'b t n -> (b t) n')
+
+        t_seq = self.net(
+            {'0': t_seq, '1': templates_sidechains},
+            templates_coors,
+            mask = mask,
+            return_type = 0
+        )
+
+        t_seq = t_seq.reshape(*shape)
+        return t_seq
+
 # structure module helpers and classes
 
 class SE3TransformerWrapper(nn.Module):
@@ -405,19 +439,28 @@ class Alphafold2(nn.Module):
 
         # template sidechain encoding
 
-        self.sidechains_proj = nn.Parameter(torch.randn(1, dim))
+        self.use_se3_transformer = use_se3_transformer
 
-        self.template_sidechain_emb = SE3Transformer(
-            dim = dim,
-            dim_head = dim,
-            heads = 1,
-            num_neighbors = 12,
-            depth = 4,
-            input_degrees = 2,
-            num_degrees = 2,
-            output_degrees = 1,
-            reversible = True
-        )
+        if use_se3_transformer:
+            self.template_sidechain_emb = SE3TemplateEmbedder(
+                dim = dim,
+                dim_head = dim,
+                heads = 1,
+                num_neighbors = 12,
+                depth = 4,
+                input_degrees = 2,
+                num_degrees = 2,
+                output_degrees = 1,
+                reversible = True
+            )
+        else:
+            self.template_sidechain_emb = EnTransformer(
+                dim = dim,
+                dim_head = dim,
+                heads = 1,
+                num_nearest_neighbors = 32,
+                depth = 4
+            )
 
         # custom embedding projection
 
@@ -596,24 +639,26 @@ class Alphafold2(nn.Module):
             # todo (make efficient)
 
             if exists(templates_sidechains):
-                shape = t_seq.shape
+                if self.use_se3_transformer:
+                    t_seq = self.template_sidechain_emb(
+                        t_seq,
+                        templates_sidechains,
+                        templates_coors,
+                        mask = templates_mask
+                    )
+                else:
+                    shape = t_seq.shape
+                    t_seq = rearrange(t_seq, 'b t n d -> (b t) n d')
+                    templates_coors = rearrange(templates_coors, 'b t n c -> (b t) n c')
+                    en_mask = rearrange(templates_mask, 'b t n -> (b t) n')
 
-                t_seq = rearrange(t_seq, 'b t n d-> (b t) n d ()')
+                    t_seq, _ = self.template_sidechain_emb(
+                        t_seq,
+                        templates_coors,
+                        mask = en_mask
+                    )
 
-                templates_sidechains = rearrange(templates_sidechains, 'b t n m -> (b t) n () m')
-                templates_sidechains = einsum('b n d m, d e -> b n e m', templates_sidechains, self.sidechains_proj)
-                templates_coors = rearrange(templates_coors, 'b t n m -> (b t) n m')
-
-                se3_templates_mask = rearrange(templates_mask, 'b t n -> (b t) n')
-
-                t_seq = self.template_sidechain_emb(
-                    {'0': t_seq, '1': templates_sidechains},
-                    templates_coors,
-                    mask = se3_templates_mask,
-                    return_type = 0
-                )
-
-                t_seq = t_seq.reshape(*shape)
+                    t_seq = t_seq.reshape(*shape)
 
             # embed template distances
 
