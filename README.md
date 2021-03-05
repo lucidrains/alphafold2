@@ -46,7 +46,7 @@ distogram = model(
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
 
-Update - Heard from Victor, author of <a href="https://github.com/lucidrains/egnn-pytorch">EGNN</a>, that his approach may also work for this problem. Will integrate E(n)-transformer into the repository by end of week.
+You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> for the refinement, if you are in the experimental mood (paper just came out a week ago).
 
 ```python
 import torch
@@ -58,6 +58,7 @@ model = Alphafold2(
     heads = 8,
     dim_head = 64,
     predict_coords = True,
+    use_se3_transformer = True,             # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
     num_backbone_atoms = 3,                 # C, Ca, N coordinates
     structure_module_dim = 4,               # se3 transformer dimension
     structure_module_depth = 1,             # depth
@@ -71,23 +72,13 @@ msa = torch.randint(0, 21, (2, 5, 32)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
-coords = model(
+coords, atom_mask = model(
     seq,
     msa,
     mask = mask,
     msa_mask = msa_mask
-) # (2, 64, 3)
-
+) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
-
-### Todo
-
-- [ ] pass in the weighted average of the embeddings from the trunk into type-0 of structure module
-- [x] use pixelshuffle to upsample by a factor of 3 to backbone C-alpha, C, N.
-- [x] determine whether the lightweight E(n)-Transformer can be a replacement, check out equivariant attention section below (answer is yes, we will be adding E(n)-Transformer)
-
-- [x] there is a bug with inplace operations for center distogram and MDS, when trying to backpropagate through the operations
-- [x] see if MDS can be done in batches, although without batches is fine too, as there is no batch norm in the system, and it is likely to be trained batch size of 1 at a time
 
 ## Sparse Attention
 
@@ -250,9 +241,9 @@ There are two equivariant self attention libraries that I have prepared for the 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
 
-Update - A new paper from Welling uses invariant features for E(n) equivariance, outperforming SE3 Transformer at a number of benchmarks at much lower costs. I have started a repository <a href="https://github.com/lucidrains/egnn-pytorch">here</a> and will eventually build out an E(n)-Transformer.
+A new paper from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `use_se3_transformer = False` on Alphafold2 initialization.
 
-Update 2 - https://github.com/lucidrains/En-transformer Another researcher has raised concerns that E3 may be less expressive than SE3. Will hear back from the paper authors whether E(n)-GNN can be used without worry for the structure refinement
+- <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
 
 ## Testing
 
@@ -364,6 +355,17 @@ https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
     author  = {Fabian B. Fuchs and Edward Wagstaff and Justas Dauparas and Ingmar Posner},
     year    = {2021},
     eprint  = {2102.13419},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.LG}
+}
+```
+
+```bibtex
+@misc{satorras2021en,
+    title   = {E(n) Equivariant Graph Neural Networks}, 
+    author  = {Victor Garcia Satorras and Emiel Hoogeboom and Max Welling},
+    year    = {2021},
+    eprint  = {2102.09844},
     archivePrefix = {arXiv},
     primaryClass = {cs.LG}
 }

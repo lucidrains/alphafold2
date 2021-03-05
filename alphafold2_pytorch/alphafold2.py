@@ -291,6 +291,26 @@ class AxialAttention(nn.Module):
         out = w_out + h_out
         return rearrange(out, 'b h w d -> b (h w) d')
 
+# structure module helpers and classes
+
+class SE3TransformerWrapper(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.net = SE3Transformer(*args, **kwargs)
+        self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
+
+    def forward(self, x, coords, mask = None):
+        output = self.net(x, coords, mask = mask)
+        x, refined_coords = output['0'], output['1']
+
+        refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
+        refined_coords = self.to_refined_coords_delta(refined_coords)
+        refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
+
+        x = rearrange(x, 'b n c () -> b n c')
+        coords = coords + refined_coords
+        return x, coords
+
 # main class
 
 class SequentialSequence(nn.Module):
@@ -354,6 +374,7 @@ class Alphafold2(nn.Module):
         num_backbone_atoms = 1,      # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_coords = False,      # structure module related keyword arguments below
         mds_iters = 5,
+        use_se3_transformer = True,  # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
@@ -472,20 +493,29 @@ class Alphafold2(nn.Module):
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
 
+        self.trunk_to_structure_dim = nn.Linear(dim, structure_module_dim)
+
         with torch_default_dtype(torch.float64):
             self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
-            self.to_refined_coords_delta = nn.Linear(structure_module_dim, 1)
 
-            self.structure_module = SE3Transformer(
-                dim = structure_module_dim,
-                depth = structure_module_depth,
-                input_degrees = 1,
-                num_degrees = 3,
-                output_degrees = 2,
-                heads = structure_module_heads,
-                num_neighbors = structure_module_knn,
-                differentiable_coors = True
-            )
+            if use_se3_transformer:
+                self.structure_module = SE3TransformerWrapper(
+                    dim = structure_module_dim,
+                    depth = structure_module_depth,
+                    input_degrees = 1,
+                    num_degrees = 3,
+                    output_degrees = 2,
+                    heads = structure_module_heads,
+                    num_neighbors = structure_module_knn,
+                    differentiable_coors = True
+                )
+            else:
+                self.structure_module = EnTransformer(
+                    dim = structure_module_dim,
+                    depth = structure_module_depth,
+                    heads = structure_module_heads,
+                    fourier_features = 2
+                )
 
     def forward(
         self,
@@ -649,9 +679,10 @@ class Alphafold2(nn.Module):
             msa_mask = msa_mask
         )
 
-        x = rearrange(x, 'b (h w) d -> b h w d', h = n)
-        x = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        distogram_logits = self.to_distogram_logits(x)
+        trunk_embeds = rearrange(x, 'b (h w) d -> b h w d', h = n)
+
+        trunk_embeds = (trunk_embeds + rearrange(trunk_embeds, 'b i j d -> b j i d')) * 0.5  # symmetrize
+        distogram_logits = self.to_distogram_logits(trunk_embeds)
 
         if not self.predict_coords:
             return distogram_logits
@@ -684,7 +715,10 @@ class Alphafold2(nn.Module):
         coords = rearrange(coords[:, :, :self.num_backbone_atoms], 'b n l d -> b (n l) d')
         # atom_tokens = scn_atom_embedd(seq)
 
-        x = self.structure_module_embeds(seq)
+        
+        trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
+        x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
+        x += self.structure_module_embeds(seq)
         x = repeat(x, 'b n d -> b n l d', l = self.num_backbone_atoms)
 
         x += rearrange(self.backbone_pos_emb, 'l d -> () () l d')
@@ -695,16 +729,9 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                print(x.shape, coords.shape)
-                output = self.structure_module(x, coords, mask = torch.ones(*coords.shape[:-1]).bool())
-                x, refined_coords = output['0'], output['1']
-
-                refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
-                refined_coords = self.to_refined_coords_delta(refined_coords)
-                refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
-
-                x = rearrange(x, 'b n c () -> b n c')
-                coords = coords + refined_coords
+                x, coords = self.structure_module(x, coords, mask = mask)
 
         coords.type(original_dtype)
-        return coords
+        return coords, mask
+
+
