@@ -9,7 +9,7 @@ from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling, scn_backbone_mask, scn_cloud_mask
+from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling, scn_backbone_mask, scn_cloud_mask, sidechain_container
 from alphafold2_pytorch.reversible import ReversibleSequence
 
 # structure module
@@ -662,7 +662,11 @@ class Alphafold2(nn.Module):
 
         if self.num_backbone_atoms == 3:
             N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
-            mask = repeat(mask, 'b n -> b (l n)', l = 3)
+
+            cloud_mask = scn_cloud_mask(seq, boolean = True)
+            flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+            chain_mask = (mask.unsqueeze(-1) * cloud_mask)
+            flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
         # structural refinement
 
@@ -670,14 +674,16 @@ class Alphafold2(nn.Module):
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
             iters = self.mds_iters,
-            fix_mirror = 0,
+            fix_mirror = True,
             N_mask = N_mask,
             CA_mask = CA_mask,
             C_mask = C_mask
         )
-
         coords = rearrange(coords_3d, 'b c n -> b n c')
-        
+        coords = sidechain_container(coords, n_aa = self.num_backbone_atoms, cloud_mask=cloud_mask)
+        coords = rearrange(coords[:, :, :self.num_backbone_atoms], 'b n l d -> b (n l) d')
+        # atom_tokens = scn_atom_embedd(seq)
+
         x = self.structure_module_embeds(seq)
         x = repeat(x, 'b n d -> b n l d', l = self.num_backbone_atoms)
 
@@ -689,7 +695,8 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                output = self.structure_module(x, coords, mask = mask)
+                print(x.shape, coords.shape)
+                output = self.structure_module(x, coords, mask = torch.ones(*coords.shape[:-1]).bool())
                 x, refined_coords = output['0'], output['1']
 
                 refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')

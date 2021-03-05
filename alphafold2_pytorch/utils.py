@@ -211,28 +211,30 @@ def scn_cloud_mask(scn_seq, boolean=True):
         * boolean: whether to return as array of idxs or boolean values
         Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask 
     """
+    scn_seq = expand_dims_to(scn_seq, 2 - len(scn_seq.shape))
     device = scn_seq.device
     batch_mask = []
     # do loop in cpu
     scn_seq = scn_seq.cpu()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB(aa)]['cloud_mask'] \
+        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa.item())]['cloud_mask'] \
                                          for aa in seq]).bool().to(device).unsqueeze(0) )
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
     if boolean:
-        return mask.bool()
-    return mask.nonzero()
+        return batch_mask.bool()
+    return batch_mask.nonzero()
 
-def scn_backbone_mask(scn_seq, boolean=True):
+def scn_backbone_mask(scn_seq, boolean=True, n_aa=3):
     """ Gets the boolean mask for N and CA positions. 
         Inputs: 
         * scn_seq: sequence(s) as provided by Sidechainnet package (int tensor/s)
+        * n_aa: number of atoms in a backbone. (may include cbeta as 4th pos)
         * bool: whether to return as array of idxs or boolean values
         Outputs: (N_mask, CA_mask, C_mask)
     """
-    wrapper = torch.zeros(*scn_seq.shape, 14)
+    wrapper = torch.zeros(*scn_seq.shape, n_aa)
     # N is the first atom in every AA. CA is the 2nd.
     wrapper[:, 0] = 1
     wrapper[:, 1] = 2
@@ -244,7 +246,7 @@ def scn_backbone_mask(scn_seq, boolean=True):
     C_mask  = wrapper == 3 
     if boolean:
         return N_mask, CA_mask, C_mask
-    return N_mask.nonzero(), CA_mask.nonzero(), C_mask.nonzero()
+    return torch.nonzero(N_mask), torch.nonzero(CA_mask), torch.nonzero(C_mask)
 
 def scn_atom_embedd(scn_seq):
     """ Returns the token for each atom in the aa. 
@@ -313,8 +315,11 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
     new_coords[:, :, :3] = predicted[:, :, :3]
-    # set rest of positions to c_beta
-    new_coords[:, :, 4:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=11)
+    # set rest of positions to c_beta if present, else c_alpha
+    if n_aa == 4:
+        new_coords[:, :, 4:] = repeat(predicted[:, :, -1], 'b l d -> b l scn d', scn=10)
+    else:
+        new_coords[:, :, 4:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=10)
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
     # hard-calculate oxygen position of carbonyl group with parallel version of NERF
@@ -537,17 +542,23 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
         * verbose: bool. verbosity level
         Output: (batch, N) containing the phi angles or (batch,) containing
                 the proportions.
+        Note: use [0] since all prots in batch have same backbone
     """ 
     # detach gradients for angle calculation - mirror selection
     pred_coords_ = torch.transpose(pred_coords.detach(), -1 , -2).cpu()
-    n_terms  = pred_coords_[:, N_mask.squeeze()]
-    c_alphas = pred_coords_[:, CA_mask.squeeze()]
+    n_terms  = pred_coords_[:, N_mask[0].squeeze()]
+    c_alphas = pred_coords_[:, CA_mask[0].squeeze()]
     # select c_term auto if not passed
     if C_mask is not None: 
-        c_terms = pred_coords_[:, C_mask.squeeze()]
+        c_terms = pred_coords_[:, C_mask[0].squeeze()]
     else:
-        c_terms  = pred_coords_[ :, torch.logical_not(torch.logical_or(N_mask,CA_mask)).squeeze() ]
+        c_terms  = pred_coords_[ :, torch.logical_not(torch.logical_or(N_mask[0],CA_mask[0])).squeeze() ]
     # compute phis for every pritein in the batch
+    # idxs = np.arange(pred_coords.shape[0])
+    # phis = get_dihedral_torch(c_terms[idxs, :-1],
+    #                       n_terms[idxs,  1:],
+    #                       c_alphas[idxs, 1:],
+    #                       c_terms[idxs,  1:])
     phis = [get_dihedral_torch(c_terms[i, :-1],
                                n_terms[i,  1:],
                                c_alphas[i, 1:],
