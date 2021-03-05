@@ -80,7 +80,11 @@ def test_coords_se3():
         heads = 8,
         dim_head = 64,
         predict_coords = True,
-        num_backbone_atoms = 3
+        num_backbone_atoms = 3,
+        structure_module_dim = 1,
+        structure_module_depth = 1,
+        structure_module_heads = 1,
+        structure_module_dim_head = 1,
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -105,7 +109,11 @@ def test_coords_se3_backwards():
         heads = 8,
         dim_head = 64,
         predict_coords = True,
-        num_backbone_atoms = 3
+        num_backbone_atoms = 3,
+        structure_module_dim = 1,
+        structure_module_depth = 1,
+        structure_module_heads = 1,
+        structure_module_dim_head = 1,
     )
 
     seq = torch.randint(0, 21, (2, 16))
