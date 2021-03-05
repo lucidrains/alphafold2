@@ -258,8 +258,8 @@ def scn_atom_embedd(scn_seq):
     # do loop in cpu
     scn_seq = scn_seq.cpu()
     for i,seq in enumerate(scn_seq):
-        batch_tokens.append( torch.tensor([CUSTOM_INFO[k]["atom_id_embedd"] \
-                                           for k in seq]).long().to(device).unsqueeze(0) )
+        batch_tokens.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa.item())]["atom_id_embedd"] \
+                                           for aa in seq]).long().to(device).unsqueeze(0) )
     batch_tokens = torch.cat(batch_tokens, dim=0)
     return batch_tokens
 

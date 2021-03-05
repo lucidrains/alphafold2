@@ -9,7 +9,7 @@ from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 
 import alphafold2_pytorch.constants as constants
-from alphafold2_pytorch.utils import get_bucketed_distance_matrix, center_distogram_torch, MDScaling, scn_backbone_mask, scn_cloud_mask, sidechain_container
+from alphafold2_pytorch.utils import *
 from alphafold2_pytorch.reversible import ReversibleSequence
 
 # structure module
@@ -471,8 +471,6 @@ class Alphafold2(nn.Module):
         self.num_backbone_atoms = num_backbone_atoms
 
         if num_backbone_atoms > 1:
-            self.backbone_pos_emb = nn.Parameter(torch.randn(num_backbone_atoms, structure_module_dim))
-
             self.to_distogram_logits = nn.Sequential(
                 nn.LayerNorm(dim),
                 nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
@@ -497,6 +495,7 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
+            self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
 
             if use_se3_transformer:
                 self.structure_module = SE3TransformerWrapper(
@@ -691,8 +690,8 @@ class Alphafold2(nn.Module):
 
         assert self.num_backbone_atoms > 1, 'must constitute to at least 3 atomic coordinates for backbone'
 
-        if self.num_backbone_atoms == 3:
-            N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
+        if self.num_backbone_atoms >= 3:
+            N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_backbone_atoms)
 
             cloud_mask = scn_cloud_mask(seq, boolean = True)
             flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
@@ -713,17 +712,17 @@ class Alphafold2(nn.Module):
             C_mask = C_mask
         )
         coords = rearrange(coords_3d, 'b c n -> b n c')
+        # will init all sidechain coords to cbeta if present else c_alpha
         coords = sidechain_container(coords, n_aa = self.num_backbone_atoms, cloud_mask=cloud_mask)
-        coords = rearrange(coords[:, :, :self.num_backbone_atoms], 'b n l d -> b (n l) d')
-        # atom_tokens = scn_atom_embedd(seq)
+        coords = rearrange(coords, 'b n l d -> b (n l) d')
+        atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
         
         trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = self.num_backbone_atoms)
-
-        x += rearrange(self.backbone_pos_emb, 'l d -> () () l d')
+        x = repeat(x, 'b n d -> b n l d', l = cloud_mask.shape[-1])
+        x += self.atom_tokens_embed(atom_tokens)
         x = rearrange(x, 'b n l d -> b (n l) d')
 
         original_dtype = coords.dtype
@@ -731,9 +730,9 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                x, coords = self.structure_module(x, coords, mask = mask)
+                x, coords = self.structure_module(x, coords, mask = flat_chain_mask)
 
         coords.type(original_dtype)
-        return coords, mask
+        return coords
 
 
