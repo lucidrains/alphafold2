@@ -734,5 +734,3 @@ class Alphafold2(nn.Module):
 
         coords.type(original_dtype)
         return coords
-
-
