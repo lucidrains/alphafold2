@@ -16,7 +16,7 @@ setup(
   ],
   install_requires=[
     'einops>=0.3',
-    'En-transformer',
+    'En-transformer>=0.0.8',
     'lie-transformer-pytorch',
     'numpy',
     'torch>=1.6',
