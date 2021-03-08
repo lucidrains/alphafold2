@@ -293,7 +293,7 @@ class AxialAttention(nn.Module):
         w_out = self.attn_width(w_x, mask = w_mask)
         w_out = rearrange(w_out, '(b t w) h d -> b t h w d', h = h, w = w, t = t)
 
-        tie_attn_dim = x.shape[1] if self.tie_row_attn else None
+        tie_attn_dim = x.shape[2] if self.tie_row_attn else None
         h_x = rearrange(x, 'b t h w d -> (b t h) w d')
         h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim)
         h_out = rearrange(h_out, '(b t h) w d -> b t h w d', h = h, w = w, t = t)
