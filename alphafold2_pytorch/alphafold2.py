@@ -246,11 +246,13 @@ class SparseAttention(Attention):
 class AxialAttention(nn.Module):
     def __init__(
         self,
+        num_axial_dims = 2,
         tie_row_attn = False,
         sparse_attn = False,
         **kwargs
     ):
         super().__init__()
+        assert num_axial_dims in {2, 3}, 'number of axial dimensions must be 2 or 3'
         attn_class = SparseAttention if sparse_attn else Attention
 
         self.tie_row_attn = tie_row_attn # tie the row attention, from the paper 'MSA Transformer'
@@ -258,38 +260,55 @@ class AxialAttention(nn.Module):
         self.attn_width = attn_class(**kwargs)
         self.attn_height = attn_class(**kwargs)
 
-    def forward(self, x, shape, context = None, mask = None, context_mask = None):
+        self.num_axial_dims = num_axial_dims
+        if num_axial_dims == 3:
+            self.attn_frames = Attention(**kwargs)
+
+    def forward(self, x, shape, mask = None):
         b, n, d = x.shape
+        assert (len(shape) - 2) == self.num_axial_dims, f'shape {shape} must have enough dimensions for {self.num_axial_dims} dimensions in axial attention'
 
         x = x.view(shape)
-        h, w = shape[1:3]
 
-        mask = mask.reshape(b, h, w) if exists(mask) else None
+        h, w = shape[-3:-1]
 
-        w_mask = h_mask = w_context = h_context = w_context_mask = h_context_mask = None
+        if self.num_axial_dims == 3:
+            t = shape[1]
+        else:
+            t = 1
+            x = rearrange(x, 'b h w d -> b () h w d')
+            mask = rearrange(mask, 'b n -> b () n')
+
+        w_mask = h_mask = None
 
         if exists(mask):
-            w_mask = rearrange(mask, 'b h w -> (b w) h', w = w)
-            h_mask = rearrange(mask, 'b h w -> (b h) w', h = h)
+            mask = mask.reshape(b, t, h, w)
+            w_mask = rearrange(mask, 'b t h w -> (b t w) h')
+            h_mask = rearrange(mask, 'b t h w -> (b t h) w')
 
-        if exists(context):
-            w_context = repeat(context, 'b n d -> (b w) n d', w = w)
-            h_context = repeat(context, 'b n d -> (b h) n d', h = h)
-            w_context_mask = repeat(context_mask, 'b n -> (b w) n', w = w)
-            h_context_mask = repeat(context_mask, 'b n -> (b h) n', h = h)
+            if self.num_axial_dims == 3:
+                f_mask = rearrange(mask, 'b t h w -> (b h w) t')
 
-        attn_kwargs = {} if not exists(context) else {'context': w_context, 'context_mask': w_context_mask}
-        w_x = rearrange(x, 'b h w d -> (b w) h d')
-        w_out = self.attn_width(w_x, mask = w_mask, **attn_kwargs)
-        w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
+        w_x = rearrange(x, 'b t h w d -> (b t w) h d')
+        w_out = self.attn_width(w_x, mask = w_mask)
+        w_out = rearrange(w_out, '(b t w) h d -> b t h w d', h = h, w = w, t = t)
 
         tie_attn_dim = x.shape[1] if self.tie_row_attn else None
-        h_x = rearrange(x, 'b h w d -> (b h) w d')
-        h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim, **attn_kwargs)
-        h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
+        h_x = rearrange(x, 'b t h w d -> (b t h) w d')
+        h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim)
+        h_out = rearrange(h_out, '(b t h) w d -> b t h w d', h = h, w = w, t = t)
 
         out = w_out + h_out
-        return rearrange(out, 'b h w d -> b (h w) d')
+
+        if self.num_axial_dims == 3:
+            f_x = rearrange(x, 'b t h w d -> (b h w) t d')
+            f_out = self.attn_frames(f_x, mask = f_mask)
+            f_out = rearrange(f_out, '(b h w) t d -> b t h w d', h = h, w = w, t = t)
+
+            out += f_out
+
+        out /= self.num_axial_dims
+        return rearrange(out, 'b t h w d -> b (t h w) d')
 
 # template module helpers and classes
 
@@ -471,24 +490,13 @@ class Alphafold2(nn.Module):
         prenorm = partial(PreNorm, dim)
         prenorm_cross = partial(PreNormCross, dim)
 
-        template_layers = nn.ModuleList([])
-        for _ in range(template_attn_depth):
-            template_layers.append(nn.ModuleList([
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                prenorm(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout)),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout))
-            ]))
-
-        self.template_attn_net = template_layers
-
         layers = nn.ModuleList([])
         for _, layer_sparse_attn in zip(range(depth), layers_sparse_attn):
 
             # self attention, for both main sequence and msa
 
             layers.append(nn.ModuleList([
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn)),
+                prenorm(AxialAttention(dim = dim, num_axial_dims = 3, seq_len = (max_seq_len, max_seq_len, max_num_templates), heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
@@ -512,21 +520,18 @@ class Alphafold2(nn.Module):
         # to distogram output
 
         self.num_backbone_atoms = num_backbone_atoms
+        needs_upsample = num_backbone_atoms > 1
 
-        if num_backbone_atoms > 1:
-            self.to_distogram_logits = nn.Sequential(
-                nn.LayerNorm(dim),
+        self.to_distogram_logits = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Sequential(
                 nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
                 Rearrange('b h w c -> b c h w'),
                 nn.PixelShuffle(num_backbone_atoms),
-                Rearrange('b c h w -> b h w c'),
-                nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
-            )
-        else:
-            self.to_distogram_logits = nn.Sequential(
-                nn.LayerNorm(dim),
-                nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
-            )
+                Rearrange('b c h w -> b h w c')
+            ) if needs_upsample else nn.Identity(),
+            nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+        )
 
         # to coordinate output
 
@@ -586,19 +591,13 @@ class Alphafold2(nn.Module):
 
         # outer sum
 
-        x = rearrange(x, 'b i d -> b i () d') + rearrange(x, 'b j d-> b () j d') # create pair-wise residue embeds
-        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j') if exists(mask) else None
-
-        # flatten
-
-        seq_shape = x.shape
-        x = rearrange(x, 'b i j d -> b (i j) d')
-        x_mask = rearrange(x_mask, 'b i j -> b (i j)') if exists(mask) else None
+        x = rearrange(x, 'b i d -> b () i () d') + rearrange(x, 'b j d-> b () () j d') # create pair-wise residue embeds
+        x_mask = rearrange(mask, 'b i -> b () i ()') + rearrange(mask, 'b j -> b () () j') if exists(mask) else None
 
         # axial positional embedding
 
         pos_emb = rearrange(self.pos_emb(n_range), 'i d -> () i () d') + rearrange(self.pos_emb_ax(n_range), 'j d -> () () j d')
-        x += rearrange(pos_emb, 'b i j d -> b (i j) d')
+        x += pos_emb
 
         # embed multiple sequence alignment (msa)
 
@@ -620,7 +619,7 @@ class Alphafold2(nn.Module):
         if exists(msa_mask):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
 
-        # trunk (template attention, wip)
+        # embed templates, if present
 
         if exists(templates_seq):
             assert exists(templates_coors), 'template residue coordinates must be supplied `templates_coors`'
@@ -667,50 +666,27 @@ class Alphafold2(nn.Module):
             t_seq = rearrange(t_seq, 'b t i d -> b t i () d') + rearrange(t_seq, 'b t j d -> b t () j d')
             t = t_seq + t_dist
 
-            template_shape = rearrange(t, 'b t h w d -> (b t) h w d').shape
-
             # template pos emb
 
             template_num_pos_emb = self.template_num_pos_emb(torch.arange(num_templates, device = device))
-
             t += rearrange(template_num_pos_emb, 't d-> () t () () d')
-            t = rearrange(t, 'b t h w d -> (b t) (h w) d')
 
-            pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () j d')
-            pos_emb = rearrange(pos_emb, 'b i j d -> b (i j) d')
+            pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () () j d')
             t += pos_emb
-
-            if exists(templates_mask):
-                t_mask = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
-                t_mask = rearrange(t_mask, 'b t h w -> (b t) (h w)')
 
             assert t.shape[-2:] == x.shape[-2:]
 
-            # template self attention followed by cross attention axially to primary sequence
+            x = torch.cat((x, t), dim = 1)
 
-            for (seq_self_attn, template_self_attn, cross_attn, ff) in self.template_attn_net:
-                x = seq_self_attn(x, mask = x_mask, shape = seq_shape)
-                t = template_self_attn(t, mask = t_mask, shape = template_shape) + t
+            if exists(templates_mask):
+                t_mask = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
+                x_mask = torch.cat((x_mask, t_mask), dim = 1)
 
-                # concat template and primary sequence, for axial attention along the template dimension
-                # very similar to the attention across the time axis from https://arxiv.org/abs/2102.05095
+        # flatten
 
-                x = rearrange(x, 'b n d -> (b n) () d', n = n ** 2)
-                t = rearrange(t, '(b t) n d -> (b n) t d', t = num_templates)
-
-                y_mask = None
-                if exists(templates_mask) and exists(x_mask):
-                    t_mask_ = rearrange(t_mask, '(b t) n -> (b n) t', t = num_templates)
-                    mask_ = rearrange(x_mask, 'b n -> (b n) ()')
-                    y_mask = torch.cat((mask_, t_mask_), dim = 1)
-
-                y = torch.cat((x, t), dim = 1)
-                y = cross_attn(y, mask = y_mask) + y
-
-                x = rearrange(y[:, 0], '(b n) d -> b n d', n = n ** 2)
-                t = rearrange(y[:, 1:], '(b n) t d -> (b t) n d', n = (n ** 2))
-
-                t = ff(t) + t
+        seq_shape = x.shape
+        x = rearrange(x, 'b t i j d -> b (t i j) d')
+        x_mask = rearrange(x_mask, 'b t i j -> b (t i j)') if exists(mask) else None
 
         # trunk
 
@@ -723,9 +699,14 @@ class Alphafold2(nn.Module):
             msa_mask = msa_mask
         )
 
-        trunk_embeds = rearrange(x, 'b (h w) d -> b h w d', h = n)
+        # remove templates, if present
 
-        trunk_embeds = (trunk_embeds + rearrange(trunk_embeds, 'b i j d -> b j i d')) * 0.5  # symmetrize
+        x = x.view(seq_shape)
+        x = x[:, 0]
+
+        # embeds to distogram
+
+        trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
         distogram_logits = self.to_distogram_logits(trunk_embeds)
 
         if not self.predict_coords:
