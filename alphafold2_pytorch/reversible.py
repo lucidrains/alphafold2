@@ -74,7 +74,7 @@ class ReversibleSelfAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, seq_shape, record_rng = record_rng, mask = mask, )
+            y1 = x1 + self.f(x2, seq_shape, record_rng = record_rng, mask = mask)
             y2 = x2 + self.g(y1, record_rng = record_rng)
             n1 = m1 + self.j(m2, msa_shape, record_rng = record_rng, mask = msa_mask)
             n2 = m2 + self.k(n1, record_rng = record_rng)
@@ -164,7 +164,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)
 
-    def forward(self, x, m, mask = None, msa_mask = None, _reverse = True, **kwargs):
+    def forward(self, x, m, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, _reverse = True, **kwargs):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -173,14 +173,14 @@ class ReversibleCrossAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, m2, record_rng = record_rng, mask = mask, context_mask = msa_mask)
+            y1 = x1 + self.f(x2, m2, record_rng = record_rng, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape)
             y2 = x2 + self.g(y1, record_rng = record_rng)
-            n1 = m1 + self.j(m2, y2, record_rng = record_rng, mask = msa_mask, context_mask = mask)
+            n1 = m1 + self.j(m2, y2, record_rng = record_rng, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, **kwargs):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, **kwargs):
         n1, n2 = torch.chunk(n, 2, dim = 2)
         del n
 
@@ -209,7 +209,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             m2.requires_grad = True
             y2.requires_grad = True
-            fm2 = self.j(m2, y2, set_rng=True, mask = msa_mask, context_mask = mask)
+            fm2 = self.j(m2, y2, set_rng=True, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape)
             torch.autograd.backward(fm2, dm1)
 
         with torch.no_grad():
@@ -239,7 +239,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             x2.requires_grad = True
             m2.requires_grad = True
-            fx2 = self.f(x2, m2, set_rng = True, mask = mask, context_mask = msa_mask)
+            fx2 = self.f(x2, m2, set_rng = True, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape)
             torch.autograd.backward(fx2, dx1)
 
         with torch.no_grad():

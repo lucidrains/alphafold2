@@ -55,6 +55,57 @@ class PreNormCross(nn.Module):
         context = self.norm_context(context)
         return self.fn(x, context, *args, **kwargs)
 
+class InterceptAttention(nn.Module):
+    def __init__(
+        self,
+        slice_tuple,
+        attn = None,
+        context = False,
+    ):
+        super().__init__()
+        assert exists(attn), 'attention function not given'
+        self.attn = attn
+        self.slice_tuple = slice_tuple
+        self.context = context
+
+    def forward(self, *args, shape = None, context_shape = None, mask = None, context_mask = None, **kwargs):
+        assert exists(shape) and exists(context_shape), 'sequence and context shape must be given for intercepting and slicing of inputs'
+        attn, slice_tuple, context = self.attn, self.slice_tuple, self.context
+
+        x, c, *args = args
+
+        if context:
+            c = c.view(context_shape)
+            c = c[slice_tuple]
+            c = rearrange(c, 'b ... d -> b (...) d')
+
+            if exists(context_mask):
+                context_mask = context_mask.view(context_shape[:-1])
+                context_mask = context_mask[slice_tuple]
+                context_mask = rearrange(context_mask, 'b ... -> b (...)')
+        else:
+            x = x.view(shape)
+            output = torch.zeros_like(x)
+            x = x[slice_tuple]
+            output_subset_shape = x.shape
+            x = rearrange(x, 'b ... d -> b (...) d')
+
+            if exists(mask):
+                mask = mask.view(shape[:-1])
+                mask = mask[slice_tuple]
+                mask = rearrange(mask, 'b ... -> b (...)')
+
+        attn_output = self.attn(x, c, *args, mask = mask, context_mask = context_mask, **kwargs)
+
+        if context:
+            return attn_output
+
+        attn_output = attn_output.view(output_subset_shape)
+        output[slice_tuple] = attn_output
+        return rearrange(output, 'b ... d -> b (...) d')
+
+# feed forward
+
 class GEGLU(nn.Module):
     def forward(self, x):
         x, gates = x.chunk(2, dim = -1)
@@ -108,7 +159,7 @@ class Attention(nn.Module):
 
         self.tie_attn_dim = tie_attn_dim
 
-    def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None):
+    def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
         context = default(context, x)
@@ -213,7 +264,7 @@ class SparseAttention(Attention):
             attn_mask_mode = 'add'
         )
 
-    def forward(self, x, mask = None):
+    def forward(self, x, mask = None, **kwargs):
         device, orig_shape, h = x.device, x.shape, self.heads
 
         b, n, _ = x.shape
@@ -392,8 +443,8 @@ class SequentialSequence(nn.Module):
 
                 # cross attention
 
-                x = cross_attn(x, m, mask = mask, context_mask = msa_mask) + x
-                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask) + m
+                x = cross_attn(x, m, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape) + x
+                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape) + m
 
             # feedforwards
 
@@ -504,10 +555,12 @@ class Alphafold2(nn.Module):
 
             # cross attention, for main sequence -> msa and then msa -> sequence
 
+            intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
+
             layers.append(nn.ModuleList([
-                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)),
+                intercept_fn(context = False, attn = prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio))),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)),
+                intercept_fn(context = True, attn = prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio))),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
