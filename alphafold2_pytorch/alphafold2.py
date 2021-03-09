@@ -386,14 +386,17 @@ class AxialAttention(nn.Module):
 
         out = w_out + h_out
 
-        if self.template_axial_attn:
+        # do attention across the templates dimension, if (1) templates are present and (2) template axial attention was activated for the module
+
+        needs_template_axial_attn = x.shape[1] > 1 and self.template_axial_attn
+        if needs_template_axial_attn:
             f_x = rearrange(x, 'b t h w d -> (b h w) t d')
             f_out = self.attn_frames(f_x, mask = f_mask)
             f_out = rearrange(f_out, '(b h w) t d -> b t h w d', h = h, w = w, t = t)
 
             out += f_out
 
-        denom = 3 if self.template_axial_attn else 2
+        denom = 3 if needs_template_axial_attn else 2
         out /= denom
 
         return rearrange(out, 'b t h w d -> b (t h w) d')
