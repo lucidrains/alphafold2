@@ -224,16 +224,6 @@ distogram = model(
 )
 ```
 
-####  Templates Todo
-
-- [ ] build template self and cross attention into the main reversible network
-
-At the moment, it goes through its own round of self-cross attention prior to the main MSA <-> sequence self cross attention, just for demonstration purposes.
-
-- [x] allow the main network to take care of binning raw template distograms, to save users from having to do the binning logic
-
-- [x] incorporate template sidechain information, as unit vectors of difference between C and C-alpha coordinates. use either <a href="https://github.com/lucidrains/geometric-vector-perceptron">GVP</a> or one-layer, one-headed SE3 Transformers for encoding
-
 ## Equivariant Attention
 
 There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
