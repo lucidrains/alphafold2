@@ -19,7 +19,6 @@ Predicting distogram, like Alphafold-1, but with attention
 ```python
 import torch
 from alphafold2_pytorch import Alphafold2
-from alphafold2_pytorch.utils import MDScaling, center_distogram_torch
 
 model = Alphafold2(
     dim = 256,
