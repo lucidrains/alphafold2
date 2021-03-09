@@ -41,7 +41,7 @@ distogram = model(
 ) # (1, 128, 128, 37)
 ```
 
-## Predicting Coordinates (wip)
+## Predicting Coordinates
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
 
@@ -142,7 +142,7 @@ model = Alphafold2(
 )
 ```
 
-## Template processing in Trunk (wip)
+## Template processing in Trunk
 
 Template processing is also largely done with axial attention, with cross attention done along the number of templates dimension. This largely follows the same scheme as in the recent all-attention approach to video classification as shown <a href="https://github.com/lucidrains/TimeSformer-pytorch">here</a>.
 
