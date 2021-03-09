@@ -56,6 +56,38 @@ class PreNormCross(nn.Module):
         context = self.norm_context(context)
         return self.fn(x, context, *args, **kwargs)
 
+# interceptor functions, for slicing and splicing of template tensors, which have been concatted to the primary sequence
+
+class InterceptFeedForward(nn.Module):
+    def __init__(
+        self,
+        slice_tuple = None,
+        ff = None
+    ):
+        super().__init__()
+        assert exists(ff), 'feedforward not given'
+        self.ff = ff
+        self.slice_tuple = slice_tuple
+
+    def forward(self, x, *args, shape = None, mask = None, **kwargs):
+        assert exists(shape), 'sequence shape must be given for intercepting and slicing of inputs'
+        ff, slice_tuple = self.ff, self.slice_tuple
+
+        if not exists(slice_tuple):
+            return ff(x, *args, **kwargs)
+
+        x = x.view(shape)
+        output = torch.zeros_like(x)
+        x = x[slice_tuple]
+        output_subset_shape = x.shape
+        x = rearrange(x, 'b ... d -> b (...) d')
+
+        ff_output = self.ff(x, *args, **kwargs)
+
+        ff_output = ff_output.view(output_subset_shape)
+        output[slice_tuple] = ff_output
+        return rearrange(output, 'b ... d -> b (...) d')
+
 class InterceptAxialAttention(nn.Module):
     def __init__(
         self,
@@ -72,7 +104,7 @@ class InterceptAxialAttention(nn.Module):
         attn, slice_tuple = self.attn, self.slice_tuple
 
         if not exists(slice_tuple):
-            return self.attn(x, *args, shape = shape, mask = mask, **kwargs)
+            return attn(x, *args, shape = shape, mask = mask, **kwargs)
 
         x = x.view(shape)
         output = torch.zeros_like(x)
@@ -85,7 +117,7 @@ class InterceptAxialAttention(nn.Module):
             mask = mask[slice_tuple]
             mask = rearrange(mask, 'b ... -> b (...)')
 
-        attn_output = self.attn(x, *args, shape = output_subset_shape, mask = mask, **kwargs)
+        attn_output = attn(x, *args, shape = output_subset_shape, mask = mask, **kwargs)
 
         attn_output = attn_output.view(output_subset_shape)
         output[slice_tuple] = attn_output
@@ -131,7 +163,7 @@ class InterceptAttention(nn.Module):
                 mask = mask[slice_tuple]
                 mask = rearrange(mask, 'b ... -> b (...)')
 
-        attn_output = self.attn(x, c, *args, mask = mask, context_mask = context_mask, **kwargs)
+        attn_output = attn(x, c, *args, mask = mask, context_mask = context_mask, **kwargs)
 
         if context:
             return attn_output
@@ -488,7 +520,7 @@ class SequentialSequence(nn.Module):
 
             # feedforwards
 
-            x = ff(x) + x
+            x = ff(x, shape = seq_shape) + x
 
             if exists(m):
                 m = msa_ff(m) + m
@@ -603,7 +635,7 @@ class Alphafold2(nn.Module):
 
             layers.append(nn.ModuleList([
                 prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = (max_seq_len, max_seq_len, max_num_templates), heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn))),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))

@@ -75,7 +75,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with context():
             y1 = x1 + self.f(x2, shape = seq_shape, record_rng = record_rng, mask = mask)
-            y2 = x2 + self.g(y1, record_rng = record_rng)
+            y2 = x2 + self.g(y1, shape = seq_shape, record_rng = record_rng)
             n1 = m1 + self.j(m2, shape = msa_shape, record_rng = record_rng, mask = msa_mask)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
@@ -90,7 +90,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             y1.requires_grad = True
-            gy1 = self.g(y1, set_rng = True)
+            gy1 = self.g(y1, shape = seq_shape, set_rng = True)
             torch.autograd.backward(gy1, dy2)
 
         with torch.no_grad():
