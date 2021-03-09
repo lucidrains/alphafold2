@@ -194,7 +194,7 @@ class FeedForward(nn.Module):
             nn.Linear(dim * mult, dim)
         )
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         return self.net(x)
 
 # attention
