@@ -2,6 +2,7 @@ import torch
 from torch import nn, einsum
 from inspect import isfunction
 from functools import partial
+from itertools import islice, cycle
 import torch.nn.functional as F
 
 from math import sqrt
@@ -54,6 +55,41 @@ class PreNormCross(nn.Module):
         x = self.norm(x)
         context = self.norm_context(context)
         return self.fn(x, context, *args, **kwargs)
+
+class InterceptAxialAttention(nn.Module):
+    def __init__(
+        self,
+        slice_tuple = None,
+        attn = None
+    ):
+        super().__init__()
+        assert exists(attn), 'attention function not given'
+        self.attn = attn
+        self.slice_tuple = slice_tuple
+
+    def forward(self, x, *args, shape = None, mask = None, **kwargs):
+        assert exists(shape), 'sequence shape must be given for intercepting and slicing of inputs'
+        attn, slice_tuple = self.attn, self.slice_tuple
+
+        if not exists(slice_tuple):
+            return self.attn(x, *args, shape = shape, mask = mask, **kwargs)
+
+        x = x.view(shape)
+        output = torch.zeros_like(x)
+        x = x[slice_tuple]
+        output_subset_shape = x.shape
+        x = rearrange(x, 'b ... d -> b (...) d')
+
+        if exists(mask):
+            mask = mask.view(shape[:-1])
+            mask = mask[slice_tuple]
+            mask = rearrange(mask, 'b ... -> b (...)')
+
+        attn_output = self.attn(x, *args, shape = output_subset_shape, mask = mask, **kwargs)
+
+        attn_output = attn_output.view(output_subset_shape)
+        output[slice_tuple] = attn_output
+        return rearrange(output, 'b ... d -> b (...) d')
 
 class InterceptAttention(nn.Module):
     def __init__(
@@ -297,13 +333,12 @@ class SparseAttention(Attention):
 class AxialAttention(nn.Module):
     def __init__(
         self,
-        num_axial_dims = 2,
+        template_axial_attn = False,
         tie_row_attn = False,
         sparse_attn = False,
         **kwargs
     ):
         super().__init__()
-        assert num_axial_dims in {2, 3}, 'number of axial dimensions must be 2 or 3'
         attn_class = SparseAttention if sparse_attn else Attention
 
         self.tie_row_attn = tie_row_attn # tie the row attention, from the paper 'MSA Transformer'
@@ -311,19 +346,19 @@ class AxialAttention(nn.Module):
         self.attn_width = attn_class(**kwargs)
         self.attn_height = attn_class(**kwargs)
 
-        self.num_axial_dims = num_axial_dims
-        if num_axial_dims == 3:
+        self.template_axial_attn = template_axial_attn
+        if template_axial_attn:
             self.attn_frames = Attention(**kwargs)
 
     def forward(self, x, shape, mask = None):
         b, n, d = x.shape
-        assert (len(shape) - 2) == self.num_axial_dims, f'shape {shape} must have enough dimensions for {self.num_axial_dims} dimensions in axial attention'
 
+        num_axials = len(shape) - 2
         x = x.view(shape)
 
         h, w = shape[-3:-1]
 
-        if self.num_axial_dims == 3:
+        if num_axials == 3:
             t = shape[1]
         else:
             t = 1
@@ -337,7 +372,7 @@ class AxialAttention(nn.Module):
             w_mask = rearrange(mask, 'b t h w -> (b t w) h')
             h_mask = rearrange(mask, 'b t h w -> (b t h) w')
 
-            if self.num_axial_dims == 3:
+            if num_axials == 3:
                 f_mask = rearrange(mask, 'b t h w -> (b h w) t')
 
         w_x = rearrange(x, 'b t h w d -> (b t w) h d')
@@ -351,14 +386,16 @@ class AxialAttention(nn.Module):
 
         out = w_out + h_out
 
-        if self.num_axial_dims == 3:
+        if self.template_axial_attn:
             f_x = rearrange(x, 'b t h w d -> (b h w) t d')
             f_out = self.attn_frames(f_x, mask = f_mask)
             f_out = rearrange(f_out, '(b h w) t d -> b t h w d', h = h, w = w, t = t)
 
             out += f_out
 
-        out /= self.num_axial_dims
+        denom = 3 if self.template_axial_attn else 2
+        out /= denom
+
         return rearrange(out, 'b t h w d -> b (t h w) d')
 
 # template module helpers and classes
@@ -436,10 +473,10 @@ class SequentialSequence(nn.Module):
 
             # self attention
 
-            x = attn(x, seq_shape, mask = mask) + x
+            x = attn(x, shape = seq_shape, mask = mask) + x
 
             if exists(m):
-                m = msa_attn(m, msa_shape, mask = msa_mask) + m
+                m = msa_attn(m, shape = msa_shape, mask = msa_mask) + m
 
                 # cross attention
 
@@ -464,6 +501,7 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
+        attn_types = ('full',),
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
         max_num_msas = constants.MAX_NUM_MSA,
@@ -542,12 +580,26 @@ class Alphafold2(nn.Module):
         prenorm_cross = partial(PreNormCross, dim)
 
         layers = nn.ModuleList([])
-        for _, layer_sparse_attn in zip(range(depth), layers_sparse_attn):
+        attn_types = islice(cycle(attn_types), depth)
 
-            # self attention, for both main sequence and msa
+        for _, layer_sparse_attn, attn_type in zip(range(depth), layers_sparse_attn, attn_types):
+
+            # self attention, for main sequence, msa, and optionally, templates
+
+            if attn_type == 'full':
+                tensor_slice = None
+                template_axial_attn = True
+            elif attn_type == 'intra_attn':
+                tensor_slice = None
+                template_axial_attn = False
+            elif attn_type == 'seq_only':
+                tensor_slice = (slice(None), slice(0, 1))
+                template_axial_attn = False
+            else:
+                raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(AxialAttention(dim = dim, num_axial_dims = 3, seq_len = (max_seq_len, max_seq_len, max_num_templates), heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn)),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = (max_seq_len, max_seq_len, max_num_templates), heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn))),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),

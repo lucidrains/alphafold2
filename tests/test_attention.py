@@ -50,7 +50,8 @@ def test_templates():
         dim = 256,
         depth = 2,
         heads = 8,
-        dim_head = 64
+        dim_head = 64,
+        attn_types = ('full', 'intra_attn', 'seq_only')
     )
 
     seq = torch.randint(0, 21, (2, 16))

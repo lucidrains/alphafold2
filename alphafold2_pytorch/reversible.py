@@ -74,9 +74,9 @@ class ReversibleSelfAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, seq_shape, record_rng = record_rng, mask = mask)
+            y1 = x1 + self.f(x2, shape = seq_shape, record_rng = record_rng, mask = mask)
             y2 = x2 + self.g(y1, record_rng = record_rng)
-            n1 = m1 + self.j(m2, msa_shape, record_rng = record_rng, mask = msa_mask)
+            n1 = m1 + self.j(m2, shape = msa_shape, record_rng = record_rng, mask = msa_mask)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
@@ -103,7 +103,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             x2.requires_grad = True
-            fx2 = self.f(x2, seq_shape, set_rng = True, mask = mask)
+            fx2 = self.f(x2, shape = seq_shape, set_rng = True, mask = mask)
             torch.autograd.backward(fx2, dx1, retain_graph = True)
 
         with torch.no_grad():
@@ -138,7 +138,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             m2.requires_grad = True
-            fm2 = self.j(m2, msa_shape, set_rng = True, mask = msa_mask)
+            fm2 = self.j(m2, shape = msa_shape, set_rng = True, mask = msa_mask)
             torch.autograd.backward(fm2, dm1, retain_graph=True)
 
         with torch.no_grad():
