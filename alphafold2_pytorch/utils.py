@@ -780,13 +780,14 @@ def lddt_ca_torch(true_coords, pred_coords, cloud_mask, r_0=15.):
     thresholds = torch.tensor([0.5, 1, 2, 4], device=device).type(dtype)
     # adapt masks
     cloud_mask = cloud_mask.bool().cpu()
-    c_alpha_mask  = torch.zeros(true_coords.shape[1:-1]).bool()
+    c_alpha_mask  = torch.zeros_like(cloud_mask).bool()
+    c_alpha_mask[:, 1] = True
     # container for c_alpha scores (between 0,1)
     wrapper = torch.zeros(true_coords.shape[:2], device=device).type(dtype)
 
     for bi, seq in enumerate(true_coords):
         # select atoms for study
-        c_alphas = cloud_mask[bi]*c_alpha_mask
+        c_alphas = cloud_mask[bi]*c_alpha_mask # only pick c_alpha positions
         selected_pred = pred_coords[bi, c_alphas] 
         selected_target = true_coords[bi, c_alphas]
         # get number under distance
