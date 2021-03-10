@@ -725,6 +725,7 @@ def tmscore_numpy(X, Y):
 
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
                     fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
+    """ Handles the specifics of MDS for proteins (mirrors, ...) """
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
                                               tol=tol, verbose=verbose)
@@ -744,6 +745,7 @@ def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
 
 def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
                     fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
+    """ Handles the specifics of MDS for proteins (mirrors, ...) """
     # batched mds for full parallel 
     preds, stresses = mds_numpy(pre_dist_mat, weights=weights,iters=iters, 
                                               tol=tol, verbose=verbose)
@@ -760,6 +762,50 @@ def mdscaling_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5,
                 print("Corrected mirror in struct no.", i)
 
     return preds, stresses
+
+
+def lddt_ca_torch(true_coords, pred_coords, cloud_mask, r_0=15.):
+    """ Computes the lddt score for each C_alpha.
+        https://academic.oup.com/bioinformatics/article/29/21/2722/195896
+        Inputs: 
+        * true_coords: (b, l, c, d) in sidechainnet format.
+        * pred_coords: (b, l, c, d) in sidechainnet format.
+        * cloud_mask : (b, l, c) adapted for scn format.
+        * r_0: float. maximum inclusion radius in reference struct.
+        Outputs:
+        * (b, l) lddt for c_alpha scores (ranging between 0 and 1)
+        See wrapper below.
+    """
+    device, dtype = true_coords.device, true_coords.type()
+    thresholds = torch.tensor([0.5, 1, 2, 4], device=device).type(dtype)
+    # adapt masks
+    cloud_mask = cloud_mask.bool().cpu()
+    c_alpha_mask  = torch.zeros(true_coords.shape[1:-1]).bool()
+    # container for c_alpha scores (between 0,1)
+    wrapper = torch.zeros(true_coords.shape[:2], device=device).type(dtype)
+
+    for bi, seq in enumerate(true_coords):
+        # select atoms for study
+        c_alphas = cloud_mask[bi]*c_alpha_mask
+        selected_pred = pred_coords[bi, c_alphas] 
+        selected_target = true_coords[bi, c_alphas]
+        # get number under distance
+        dist_mat_pred = torch.cdist(selected_pred, selected_pred, p=2)
+        dist_mat_target = torch.cdist(selected_target, selected_target, p=2) 
+        under_r0_target = dist_mat_target < r_0
+        compare_dists = torch.abs(dist_mat_pred - dist_mat_target)[under_r0_target]
+        # measure diff below threshold
+        score = torch.zeros_like(under_r0_target).float()
+        max_score = torch.zeros_like(under_r0_target).float()
+        max_score[under_r0_pred] = 4.
+        # measure under how many thresholds
+        score[under_r0_pred] = thresholds.shape[0] - \
+                               torch.bucketize( compare_dists, boundaries=thresholds ).float()
+        # dont include diagonal
+        wrapper[bi, cloud_mask[bi]] = ( score.sum(dim=-1) - thresholds.shape[0] ) / \
+                                      ( max_score.sum(dim=-1) - thresholds.shape[0] )
+
+    return wrapper
 
 
 ################
