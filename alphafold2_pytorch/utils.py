@@ -534,9 +534,9 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
         Angle Phi between planes: (Cterm{-1}, N, Ca{0}) and (N{0}, Ca{+1}, Cterm{+1})
         Inputs:
         * pred_coords: (batch, 3, N) predicted coordinates
-        * N_mask: (N, ) boolean mask for N-term positions
-        * CA_mask: (N, ) boolean mask for C-alpha positions
-        * C_mask: (N, ) or None. boolean mask for C-alpha positions or
+        * N_mask: (batch, N) boolean mask for N-term positions
+        * CA_mask: (batch, N) boolean mask for C-alpha positions
+        * C_mask: (batch, N) or None. boolean mask for C-alpha positions or
                     automatically calculate from N_mask and CA_mask if None.
         * prop: bool. whether to return as a proportion of negative phis.
         * verbose: bool. verbosity level
@@ -546,19 +546,18 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
     """ 
     # detach gradients for angle calculation - mirror selection
     pred_coords_ = torch.transpose(pred_coords.detach(), -1 , -2).cpu()
+    # ensure dims
+    N_mask = expand_dims_to( N_mask, 2-len(N_mask.shape) )
+    CA_mask = expand_dims_to( CA_mask, 2-len(CA_mask.shape) )
+    if C_mask is not None: 
+        C_mask = expand_dims_to( C_mask, 2-len(C_mask.shape) )
+    else:
+        C_mask = torch.logical_not(torch.logical_or(N_mask,CA_mask))
+    # select points
     n_terms  = pred_coords_[:, N_mask[0].squeeze()]
     c_alphas = pred_coords_[:, CA_mask[0].squeeze()]
-    # select c_term auto if not passed
-    if C_mask is not None: 
-        c_terms = pred_coords_[:, C_mask[0].squeeze()]
-    else:
-        c_terms  = pred_coords_[ :, torch.logical_not(torch.logical_or(N_mask[0],CA_mask[0])).squeeze() ]
+    c_terms  = pred_coords_[:, C_mask[0].squeeze()]
     # compute phis for every pritein in the batch
-    # idxs = np.arange(pred_coords.shape[0])
-    # phis = get_dihedral_torch(c_terms[idxs, :-1],
-    #                       n_terms[idxs,  1:],
-    #                       c_alphas[idxs, 1:],
-    #                       c_terms[idxs,  1:])
     phis = [get_dihedral_torch(c_terms[i, :-1],
                                n_terms[i,  1:],
                                c_alphas[i, 1:],
@@ -780,16 +779,16 @@ def lddt_ca_torch(true_coords, pred_coords, cloud_mask, r_0=15.):
     thresholds = torch.tensor([0.5, 1, 2, 4], device=device).type(dtype)
     # adapt masks
     cloud_mask = cloud_mask.bool().cpu()
-    c_alpha_mask  = torch.zeros_like(cloud_mask).bool()
-    c_alpha_mask[:, 1] = True
+    c_alpha_mask  = torch.zeros(cloud_mask.shape[1:], device=device).bool() # doesn't have batch dim
+    c_alpha_mask[..., 1] = True
     # container for c_alpha scores (between 0,1)
     wrapper = torch.zeros(true_coords.shape[:2], device=device).type(dtype)
 
     for bi, seq in enumerate(true_coords):
         # select atoms for study
         c_alphas = cloud_mask[bi]*c_alpha_mask # only pick c_alpha positions
-        selected_pred = pred_coords[bi, c_alphas] 
-        selected_target = true_coords[bi, c_alphas]
+        selected_pred = pred_coords[bi, c_alphas, :] 
+        selected_target = true_coords[bi, c_alphas, :]
         # get number under distance
         dist_mat_pred = torch.cdist(selected_pred, selected_pred, p=2)
         dist_mat_target = torch.cdist(selected_target, selected_target, p=2) 
@@ -798,13 +797,14 @@ def lddt_ca_torch(true_coords, pred_coords, cloud_mask, r_0=15.):
         # measure diff below threshold
         score = torch.zeros_like(under_r0_target).float()
         max_score = torch.zeros_like(under_r0_target).float()
-        max_score[under_r0_pred] = 4.
+        max_score[under_r0_target] = 4.
         # measure under how many thresholds
-        score[under_r0_pred] = thresholds.shape[0] - \
-                               torch.bucketize( compare_dists, boundaries=thresholds ).float()
+        score[under_r0_target] = thresholds.shape[0] - \
+                                 torch.bucketize( compare_dists, boundaries=thresholds ).float()
         # dont include diagonal
-        wrapper[bi, cloud_mask[bi]] = ( score.sum(dim=-1) - thresholds.shape[0] ) / \
-                                      ( max_score.sum(dim=-1) - thresholds.shape[0] )
+        l_mask = c_alphas.float().sum(dim=-1).bool()
+        wrapper[bi, l_mask] = ( score.sum(dim=-1) - thresholds.shape[0] ) / \
+                              ( max_score.sum(dim=-1) - thresholds.shape[0] )
 
     return wrapper
 

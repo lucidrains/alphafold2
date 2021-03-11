@@ -67,6 +67,15 @@ def test_sidechain_container():
     proto_3d = sidechain_container(bb, n_aa=4, place_oxygen=True)
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
+
+def test_lddt():
+    a = torch.randn(2, 137, 14, 3)
+    b = torch.randn(2, 137, 14, 3)
+    cloud_mask = torch.ones(a.shape[:-1]).bool()
+    lddt_result = lddt_ca_torch(a, b, cloud_mask)
+
+    assert list(lddt_result.shape) == [2, 137]
+
 def test_kabsch():
     a  = torch.randn(3, 8)
     b  = torch.randn(3, 8) 
