@@ -483,7 +483,6 @@ class SE3TransformerWrapper(nn.Module):
         refined_coords = self.to_refined_coords_delta(refined_coords)
         refined_coords = rearrange(refined_coords, 'b n c () -> b n c')
 
-        x = rearrange(x, 'b n c () -> b n c')
         coords = coords + refined_coords
         return x, coords
 
