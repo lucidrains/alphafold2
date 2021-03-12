@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'alphafold2-pytorch',
   packages = find_packages(),
-  version = '0.0.50',
+  version = '0.0.51',
   license='MIT',
   description = 'AlphaFold2 - Pytorch',
   author = 'Phil Wang, Eric Alcaide',
@@ -18,11 +18,12 @@ setup(
     'einops>=0.3',
     'En-transformer>=0.0.8',
     'lie-transformer-pytorch',
-    'numpy',
-    'torch>=1.6',
     'mdtraj>=1.8',
-    'tqdm',
-    'se3-transformer-pytorch'
+    'numpy',
+    'ProDy',
+    'se3-transformer-pytorch',
+    'torch>=1.6',
+    'tqdm'
   ],
   setup_requires=[
     'pytest-runner',
