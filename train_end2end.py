@@ -179,16 +179,8 @@ for _ in range(NUM_BATCHES):
         if TO_PDB: 
             # idx from batch to save prot and label
             idx = 0
-            # create wrappers to 0
-            wrapper_pred = rearrange( torch.zeros_like( coords[idx] ), '(l c) d -> l c d')
-            wrapper_target = wrapper_pred.clone()
-            wrapper_pred[cloud_mask] = coords_aligned[idx]
-            wrapper_target[cloud_mask] = labels_aligned[idx]
-            # build structures and save
-            sb_pred = scn.StructureBuilder( seq[idx, :, 0], crd=wrapper_pred ) 
-            sb_target = scn.StructureBuilder( seq[idx, :, 0], crd=wrapper_target ) 
-            sb_pred.to_pdb(SAVE_DIR+"pred.pdb")
-            sb_target.to_pdb(SAVE_DIR+"target.pdb")
+            coords2pdb(seq[idx, :, 0], coords_aligned[idx], cloud_mask, prefix=SAVE_DIR, name="pred.pdb")
+            coords2pdb(seq[idx, :, 0], labels_aligned[idx], cloud_mask, prefix=SAVE_DIR, name="label.pdb")
 
         # loss - RMSE + distogram_dispersion
         loss = torch.sqrt(criterion(coords_aligned[flat_chain_mask], labels_aligned[flat_chain_mask])) + \

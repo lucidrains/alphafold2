@@ -202,6 +202,22 @@ def custom2pdb(coords, proteinnet_id, route):
     return pdb_destin, route
 
 
+def coords2pdb(seq, coords, cloud_mask, prefix="", name="af2_struct.pdb"):
+    """ Turns coordinates into PDB files ready to be visualized. 
+        Inputs:
+        * seq: (L,) tensor of ints (sidechainnet aa-key pairs)
+        * coords: (3, N) coords of atoms
+        * cloud_mask: (L, C) boolean mask of occupied spaces in scn format
+        * prefix: str. directory to save files.
+        * name: str. name of destin file (ex: pred1.pdb)
+    """
+    scaffold = torch.zeros( cloud_mask.shape, 3 )
+    scaffold[cloud_mask] = coords.cpu().float()
+    # build structures and save
+    pred = scn.StructureBuilder( seq, crd=scaffold ) 
+    pred.to_pdb(prefix+name)
+
+
 # sidechainnet utils
 
 def scn_cloud_mask(scn_seq, boolean=True):
