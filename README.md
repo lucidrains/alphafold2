@@ -52,7 +52,7 @@ model = Alphafold2(
     depth = 2,
     heads = 8,
     dim_head = 64,
-    predict_angles = True   # turn this to True
+    predict_angles = True   # set this to True
 ).cuda()
 
 seq = torch.randint(0, 21, (1, 128)).cuda()
@@ -68,9 +68,9 @@ distogram, theta, phi, omega = model(
 )
 
 # distogram - (1, 128, 128, 37),
-# theta - (1, 128, 128, 25),
-# phi - (1, 128, 128, 13),
-# omega - (1, 128, 128, 25)
+# theta     - (1, 128, 128, 25),
+# phi       - (1, 128, 128, 13),
+# omega     - (1, 128, 128, 25)
 ```
 
 ## Predicting Coordinates
