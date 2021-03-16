@@ -548,6 +548,7 @@ class Alphafold2(nn.Module):
         msa_tie_row_attn = False,
         template_attn_depth = 2,
         num_backbone_atoms = 1,      # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
+        predict_angles = False,
         predict_coords = False,      # structure module related keyword arguments below
         mds_iters = 5,
         use_se3_transformer = True,  # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
@@ -578,6 +579,14 @@ class Alphafold2(nn.Module):
         self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
         self.template_pos_emb = nn.Embedding(max_seq_len, dim)
         self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
+
+        # projection for angles, if needed
+
+        self.predict_angles = predict_angles
+        if predict_angles:
+            self.to_prob_theta = nn.Linear(dim, constants.THETA_BUCKETS)
+            self.to_prob_phi   = nn.Linear(dim, constants.PHI_BUCKETS)
+            self.to_prob_omega = nn.Linear(dim, constants.OMEGA_BUCKETS)
 
         # template sidechain encoding
 
@@ -848,8 +857,20 @@ class Alphafold2(nn.Module):
         trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
         distogram_logits = self.to_distogram_logits(trunk_embeds)
 
+
+        # determine angles, if specified
+
+        ret = distogram_logits
+
+        if self.predict_angles:
+            theta_logits = self.to_prob_theta(x)
+            phi_logits = self.to_prob_phi(x)
+            omega_logits = self.to_prob_omega(x)
+
+            ret = (distogram_logits, theta_logits, phi_logits, omega_logits)
+
         if not self.predict_coords:
-            return distogram_logits
+            return ret
 
         # prepare mask for backbone coordinates
 

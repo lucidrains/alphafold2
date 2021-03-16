@@ -41,6 +41,38 @@ distogram = model(
 ) # (1, 128, 128, 37)
 ```
 
+You can also turn on prediction for the angles, by passing a `predict_angles = True` on init. The below example would be equivalent to <a href="https://github.com/lucidrains/tr-rosetta-pytorch">trRosetta</a> but with self / cross attention.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    predict_angles = True   # turn this to True
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 64)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram, theta, phi, omega = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+)
+
+# distogram - (1, 128, 128, 37),
+# theta - (1, 128, 128, 25),
+# phi - (1, 128, 128, 13),
+# omega - (1, 128, 128, 25)
+```
+
 ## Predicting Coordinates
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.

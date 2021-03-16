@@ -23,6 +23,28 @@ def test_main():
     )
     assert True
 
+def test_anglegrams():
+    model = Alphafold2(
+        dim = 256,
+        depth = 2,
+        heads = 8,
+        dim_head = 64,
+        predict_angles = True
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    msa = torch.randint(0, 21, (2, 5, 64))
+    mask = torch.ones_like(seq).bool()
+    msa_mask = torch.ones_like(msa).bool()
+
+    distogram, theta, phi, omega = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+    assert True
+
 def test_msa_tie_row_attn():
     model = Alphafold2(
         dim = 256,
