@@ -3,6 +3,7 @@ from torch import nn, einsum
 from inspect import isfunction
 from functools import partial
 from itertools import islice, cycle
+from collections import namedtuple
 import torch.nn.functional as F
 
 from math import sqrt
@@ -18,6 +19,10 @@ from alphafold2_pytorch.reversible import ReversibleSequence
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype
 from en_transformer import EnTransformer
+
+# constants
+
+Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
 
 # helpers
 
@@ -550,6 +555,7 @@ class Alphafold2(nn.Module):
         num_backbone_atoms = 1,      # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
         predict_coords = False,      # structure module related keyword arguments below
+        return_aux_logits = False,
         mds_iters = 5,
         use_se3_transformer = True,  # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
@@ -587,6 +593,10 @@ class Alphafold2(nn.Module):
             self.to_prob_theta = nn.Linear(dim, constants.THETA_BUCKETS)
             self.to_prob_phi   = nn.Linear(dim, constants.PHI_BUCKETS)
             self.to_prob_omega = nn.Linear(dim, constants.OMEGA_BUCKETS)
+
+        # when predicting the coordinates, whether to return the other logits, distogram (and optionally, angles)
+
+        self.return_aux_logits = return_aux_logits
 
         # template sidechain encoding
 
@@ -867,7 +877,7 @@ class Alphafold2(nn.Module):
             phi_logits = self.to_prob_phi(x)
             omega_logits = self.to_prob_omega(x)
 
-            ret = (distogram_logits, theta_logits, phi_logits, omega_logits)
+            ret = Logits(distogram_logits, theta_logits, phi_logits, omega_logits)
 
         if not self.predict_coords:
             return ret
@@ -919,4 +929,8 @@ class Alphafold2(nn.Module):
                 x, coords = self.structure_module(x, coords, mask = flat_chain_mask)
 
         coords.type(original_dtype)
+
+        if self.return_aux_logits:
+            return coords, ret
+
         return coords
