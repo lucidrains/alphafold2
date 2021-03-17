@@ -31,7 +31,7 @@ def test_mds_and_mirrors():
     CA_mask = (masker==1).bool()
     coords_3d, _ = MDScaling(distances, 
         weights = weights,
-        iters = 50, 
+        iters = 5, 
         fix_mirror = 2,
         N_mask = N_mask,
         CA_mask = CA_mask,
