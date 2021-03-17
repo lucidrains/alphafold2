@@ -894,11 +894,17 @@ class Alphafold2(nn.Module):
             chain_mask = (mask.unsqueeze(-1) * cloud_mask)
             flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-            mask = rearrange(chain_mask[:, :, :self.num_backbone_atoms], 'b l c -> b (l c)')
+            bb_mask = rearrange(chain_mask[:, :, :self.num_backbone_atoms], 'b l c -> b (l c)')
 
         # structural refinement
 
         distances, weights = center_distogram_torch(distogram_logits)
+
+        paddings = (seq == 20).sum(dim=-1)
+        for i,pad in enumerate(paddings):
+            if pad > 0:
+                weights[i, -pad:, -pad:] = 0.
+
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
             iters = self.mds_iters,

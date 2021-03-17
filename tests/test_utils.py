@@ -16,9 +16,14 @@ def test_masks():
     assert True
 
 def test_mds_and_mirrors():
-    distogram = torch.randn(1, 32*3, 32*3, 37)
+    distogram = torch.randn(2, 32*3, 32*3, 37)
 
     distances, weights = center_distogram_torch(distogram)
+    # set out some points (due to padding)
+    paddings = [7,0]
+    for i,pad in enumerate(paddings):
+        if pad > 0:
+            weights[i, -pad:, -pad:] = 0.
 
     # masks
     masker  = torch.arange(distogram.shape[1]) % 3
