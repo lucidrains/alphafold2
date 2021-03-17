@@ -552,12 +552,13 @@ class Alphafold2(nn.Module):
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
-        num_backbone_atoms = 1,      # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
+        num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
-        predict_coords = False,      # structure module related keyword arguments below
+        predict_coords = False,                # structure module related keyword arguments below
+        predict_real_value_distances = False,
         return_aux_logits = False,
         mds_iters = 5,
-        use_se3_transformer = True,  # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
+        use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
@@ -680,6 +681,9 @@ class Alphafold2(nn.Module):
         self.num_backbone_atoms = num_backbone_atoms
         needs_upsample = num_backbone_atoms > 1
 
+        self.predict_real_value_distances = predict_real_value_distances
+        dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
+
         self.to_distogram_logits = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Sequential(
@@ -688,7 +692,7 @@ class Alphafold2(nn.Module):
                 nn.PixelShuffle(num_backbone_atoms),
                 Rearrange('b c h w -> b h w c')
             ) if needs_upsample else nn.Identity(),
-            nn.Linear(dim, constants.DISTOGRAM_BUCKETS)
+            nn.Linear(dim, dim_distance_pred)
         )
 
         # to coordinate output
@@ -865,19 +869,18 @@ class Alphafold2(nn.Module):
         # embeds to distogram
 
         trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
-        distogram_logits = self.to_distogram_logits(trunk_embeds)
-
+        distance_pred = self.to_distogram_logits(trunk_embeds)
 
         # determine angles, if specified
 
-        ret = distogram_logits
+        ret = distance_pred
 
         if self.predict_angles:
             theta_logits = self.to_prob_theta(x)
             phi_logits = self.to_prob_phi(x)
             omega_logits = self.to_prob_omega(x)
 
-            ret = Logits(distogram_logits, theta_logits, phi_logits, omega_logits)
+            ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
 
         if not self.predict_coords:
             return ret
@@ -898,7 +901,12 @@ class Alphafold2(nn.Module):
 
         # structural refinement
 
-        distances, weights = center_distogram_torch(distogram_logits)
+        if self.predict_real_value_distances:
+            distances, distance_std = distance_pred.unbind(dim = -1)
+            weights = (1 / (1 + distance_std)) # could also do a distance_std.sigmoid() here
+        else:
+            distances, weights = center_distogram_torch(distance_pred)
+
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
             iters = self.mds_iters,

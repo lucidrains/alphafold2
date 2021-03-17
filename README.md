@@ -111,6 +111,45 @@ coords = model(
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
 
+## Real-Value Distance Prediction
+
+A <a href="https://www.biorxiv.org/content/10.1101/2020.11.26.400523v1.full.pdf">paper</a> by Jinbo Xu suggests that one doesn't need to bin the distances, and can instead predict the mean and standard deviation directly. You can use this by turning on one flag `predict_real_value_distances`, in which case, the distance prediction returned will have a dimension of `2` for the mean and standard deviation respectively.
+
+If `predict_coords` is also turned on, then the MDS will accept the mean and standard deviation predictions directly without having to calculate that from the distogram bins.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    predict_coords = True,
+    predict_real_value_distances = True,      # set this to True
+    use_se3_transformer = True,
+    num_backbone_atoms = 3,
+    structure_module_dim = 4,
+    structure_module_depth = 1,
+    structure_module_heads = 1,
+    structure_module_dim_head = 16,
+    structure_module_refinement_iters = 2
+).cuda()
+
+seq = torch.randint(0, 21, (2, 64)).cuda()
+msa = torch.randint(0, 21, (2, 5, 32)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+coords = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (2, 64 * 3, 3)  <-- 3 atoms per residue
+```
+
 ## Sparse Attention
 
 You can train with Microsoft Deepspeed's <a href="https://www.deepspeed.ai/news/2020/09/08/sparse-attention.html">Sparse Attention</a>, but you will have to endure the installation process. It is two-steps.
