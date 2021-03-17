@@ -738,6 +738,7 @@ class Alphafold2(nn.Module):
         templates_coors = None,
         templates_sidechains = None,
         embedds = None,
+        return_trunk = False
     ):
         n, device = seq.shape[1], seq.device
         n_range = torch.arange(n, device = device)
@@ -882,7 +883,7 @@ class Alphafold2(nn.Module):
 
             ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
 
-        if not self.predict_coords:
+        if not self.predict_coords or return_trunk:
             return ret
 
         # prepare mask for backbone coordinates
