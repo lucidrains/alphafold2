@@ -37,7 +37,7 @@ def test_mds_and_mirrors():
         CA_mask = CA_mask,
         C_mask = None
     )
-    assert list(coords_3d.shape) == [1, 3, 32*3], 'coordinates must be of the right shape after MDS'
+    assert list(coords_3d.shape) == [2, 3, 32*3], 'coordinates must be of the right shape after MDS'
 
 def test_nerf_and_dihedral():
     # create points
