@@ -39,11 +39,21 @@ def cast_tuple(val, depth):
 
 # helper classes
 
+class ScaleNorm(nn.Module):
+    def __init__(self, dim, eps = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.g = nn.Parameter(torch.ones(1))
+
+    def forward(self, x):
+        n = torch.norm(x, dim = -1, keepdim = True).clamp(min = self.eps)
+        return x / n * self.g
+
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
         self.fn = fn
-        self.norm = nn.LayerNorm(dim)
+        self.norm = ScaleNorm(dim)
 
     def forward(self, x, *args, **kwargs):
         x = self.norm(x)
@@ -53,8 +63,8 @@ class PreNormCross(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
         self.fn = fn
-        self.norm = nn.LayerNorm(dim)
-        self.norm_context = nn.LayerNorm(dim)
+        self.norm = ScaleNorm(dim)
+        self.norm_context = ScaleNorm(dim)
 
     def forward(self, x, context, *args, **kwargs):
         x = self.norm(x)
@@ -685,7 +695,7 @@ class Alphafold2(nn.Module):
         dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
 
         self.to_distogram_logits = nn.Sequential(
-            nn.LayerNorm(dim),
+            ScaleNorm(dim),
             nn.Sequential(
                 nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
                 Rearrange('b h w c -> b c h w'),
