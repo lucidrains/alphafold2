@@ -20,7 +20,7 @@ setup(
     'lie-transformer-pytorch',
     'mdtraj>=1.8',
     'numpy',
-    'ProDy',
+    'proDy',
     'requests',
     'se3-transformer-pytorch>=0.0.24',
     'sidechainnet',
