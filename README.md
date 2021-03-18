@@ -338,9 +338,11 @@ https://moalquraishi.wordpress.com/2020/12/08/alphafold2-casp14-it-feels-like-on
 
 <img src="./images/reddit.png"></img>
 
-Developments from competing labs
+## Recent works by competing labs
 
 https://www.biorxiv.org/content/10.1101/2020.12.10.419994v1.full.pdf
+
+https://pubmed.ncbi.nlm.nih.gov/33637700/
 
 <a href="./images/tFold.pdf">tFold presentation, from Tencent AI labs</a>
 
