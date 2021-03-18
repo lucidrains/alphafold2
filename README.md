@@ -313,20 +313,7 @@ $ python setup.py test
 
 ## Data
 
-This library will use the awesome work by <a href="http://github.com/jonathanking">Jonathan King</a> at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>.
-
-To install
-
-```bash
-$ pip install git+https://github.com/jonathanking/sidechainnet.git
-```
-
-Or
-
-```bash
-$ git clone https://github.com/jonathanking/sidechainnet.git
-$ cd sidechainnet && pip install -e .
-```
+This library will use the awesome work by <a href="http://github.com/jonathanking">Jonathan King</a> at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>. Thank you Jonathan 🙏!
 
 ## Speculation
 

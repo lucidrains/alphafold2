@@ -5,22 +5,18 @@ import torch
 from functools import wraps
 from einops import rearrange, repeat
 
-# bio
+# sidechainnet
 
-try:
-    from sidechainnet.utils.sequence import ProteinVocabulary, ONE_TO_THREE_LETTER_MAP
-    from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
-    from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
-    from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
-    # build vocablary
-    VOCAB = ProteinVocabulary()
-except:
-    NUM_COORDS_PER_RES = 14
-    GLOBAL_PAD_CHAR = 0
-    BB_BUILD_INFO = {"BONDLENS": {"c-o": 1.229},
-                     "BONDANGS": {"ca-c-o": 2.0944}}
+from sidechainnet.utils.sequence import ProteinVocabulary, ONE_TO_THREE_LETTER_MAP
+from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
+from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
+from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 
-# own
+# build vocabulary
+
+VOCAB = ProteinVocabulary()
+
+# constants
 
 import alphafold2_pytorch.constants as constants
 
