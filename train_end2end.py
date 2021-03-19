@@ -92,16 +92,6 @@ model = Alphafold2(
     structure_module_refinement_iters = 2
 ).to(DEVICE)
 
-refiner = SE3Transformer(
-    num_tokens = 10, # 10 unique atoms ([N-term, C-alpha, C-term, C-beta, =O, -O], C, O, N, S )
-    dim = 64,
-    depth = 2,
-    input_degrees = 1,
-    num_degrees = 2,
-    output_degrees = 2,
-    reduce_dim_out = True
-)
-
 # optimizer 
 
 dispersion_weight = 0.1
