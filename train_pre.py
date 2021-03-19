@@ -39,8 +39,7 @@ data = scn.load(
     thinning = 30,
     with_pytorch = 'dataloaders',
     batch_size = 1,
-    dynamic_batching = False,
-    return_masks = True
+    dynamic_batching = False
 )
 
 data = iter(data['train'])
@@ -64,12 +63,14 @@ optim = Adam(model.parameters(), lr = LEARNING_RATE)
 
 for _ in range(NUM_BATCHES):
     for _ in range(GRADIENT_ACCUMULATE_EVERY):
-        _, seq, _, mask, *_, coords = next(dl)
-        b, l = seq.shape
+        batch = next(dl)
+        seq, coords, mask = batch.seqs, batch.crds, batch.msks
+
+        b, l, _ = seq.shape
 
         # prepare mask, labels
 
-        seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
+        seq, coords, mask = seq.armax(dim = -1).to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
         discretized_distances = get_bucketed_distance_matrix(coords[:, :, 0], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)

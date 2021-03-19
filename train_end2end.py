@@ -5,11 +5,13 @@ import torch.nn.functional as F
 from einops import rearrange
 
 # data
+
 import sidechainnet as scn
 from sidechainnet.sequence.utils import VOCAB
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 
 # models
+
 from alphafold2_pytorch import Alphafold2
 import alphafold2_pytorch.constants as constants
 
@@ -67,8 +69,7 @@ data = scn.load(
     thinning = 30,
     with_pytorch = 'dataloaders',
     batch_size = 1,
-    dynamic_batching = False,
-    return_masks = True
+    dynamic_batching = False
 )
 
 data = iter(data['train'])
@@ -79,10 +80,16 @@ dl = cycle(data, data_cond)
 
 model = Alphafold2(
     dim = 256,
-    pos_tokens = 3, # N-term, C-alpha, C-term
     depth = 1,
     heads = 8,
-    dim_head = 64
+    dim_head = 64,
+    predict_coords = True,
+    num_backbone_atoms = 3,
+    structure_module_dim = 8,
+    structure_module_depth = 2,
+    structure_module_heads = 4,
+    structure_module_dim_head = 16,
+    structure_module_refinement_iters = 2
 ).to(DEVICE)
 
 refiner = SE3Transformer(
@@ -105,22 +112,19 @@ optim = Adam(model.parameters(), lr = LEARNING_RATE)
 
 for _ in range(NUM_BATCHES):
     for _ in range(GRADIENT_ACCUMULATE_EVERY):
-        _, seq, _, mask, *_, coords = next(dl)
-        b, l = seq.shape
+        batch = next(dl)
+        seq, coords, mask = batch.seqs, batch.crds, batch.msks
+
+        b, l, _ = seq.shape
 
         # prepare data and mask labels
-        seq, coords, mask = seq.to(DEVICE), coords.to(DEVICE), mask.to(DEVICE)
+        seq, coords, mask = seq.argmax(dim = -1).to(DEVICE), coords.to(DEVICE), mask.to(DEVICE)
         # coords = rearrange(coords, 'b (l c) d -> b l c d', l = l) # no need to rearrange for now
         # mask the atoms and backbone positions for each residue
-        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True)
-        cloud_mask = scn_cloud_mask(seq, boolean = False)
-        flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
-        # chain_mask is all atoms that will be backpropped thru -> existing + trainable 
-        chain_mask = (mask * cloud_mask)[cloud_mask]
-        flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
         # sequence embedding (msa / esm / attn / or nothing)
         msa, embedds = None
+
         # get embedds
         if FEATURES == "esm":
             embedds = get_esm_embedd(seq)
@@ -131,51 +135,34 @@ for _ in range(NUM_BATCHES):
         else:
             pass
 
-        # elongate inputs by a factor of 3 : N-term, C-alpha C-term
-        back = 4
-        seq  = repeat(seq, 'b l -> b l back', back = back)
-        seq  = rearrange(seq, 'b l back -> b (l back)')
-        seq_pos = repeat(torch.arange(seq.shape[-1]) % back, 'lback -> b lback', b=seq.shape[0])
-        mask = repeat(mask, 'b l -> b l back', back = back)
-        mask = rearrange(mask, 'b l back -> b (l back)')
-        if FEATURES == "msa":
-            msa = repeat(msa, 'b l d -> b l back d', back = back)
-            msa = rearrange(msa, 'b l back d -> b (l back) d')
-        if FEATURES == "esm": 
-            embedds = repeat(embedds, 'b l d -> b l back d', back = back)
-            embedds = rearrange(embedds, 'b l back d -> b (l back) d')
+        # predict - out is (batch, L * 3, 3)
 
-        # predict - out is (batch, L*3, 3)
-        distogram = model([seq, seq_pos], msa = msa, embedds = embedds, mask = mask) 
-
-        # convert to 3d (batch, N, N, d) -> (batch, N, N) -> (batch, N, 3)
-        distances, weights = center_distogram_torch(distogram)
-
-        coords_3d, stress = MDScaling(distances, 
-            weights,
-            iters = 200, 
-            fix_mirror = 5, 
-            N_mask = N_mask,
-            CA_mask = CA_mask,
-            C_mask = C_mask
-        ) 
+        refined = model(
+            seq,
+            msa = msa,
+            embedds = embedds,
+            mask = mask
+        )
 
         # build SC container. set SC points to CA and optionally place carbonyl O
         proto_sidechain = sidechain_container(coords_3d, n_aa=batch,
                                               cloud_mask=cloud_mask, place_oxygen=False)
-        
-        ## refine
-        # sample tokens for now based on indices
-        atom_tokens = scn_atom_embedd(seq[..., 0]) # undo the *batch repeat by selecting 0
-        refined = refiner(atom_tokens[cloud_mask],
-                          proto_sidechain[cloud_mask],
-                          mask=chain_mask,
-                          return_type=1) # (batch, N, 3)
 
         # rotate / align
         coords_aligned, labels_aligned = Kabsch(refined, coords[flat_cloud_mask])
 
+        # atom mask
+
+        cloud_mask = scn_cloud_mask(seq, boolean = False)
+        flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+
+        # chain_mask is all atoms that will be backpropped thru -> existing + trainable 
+
+        chain_mask = (mask * cloud_mask)[cloud_mask]
+        flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
+
         # save pdb files for visualization
+
         if TO_PDB: 
             # idx from batch to save prot and label
             idx = 0
