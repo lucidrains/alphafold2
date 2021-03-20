@@ -8,9 +8,8 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import einsum, nn
 from torch.utils.data import Dataset
-
-from alphafold2_pytorch import Alphafold2, constants
-from alphafold2_pytorch.alphafold2 import FeedForward, PreNorm, exists, partial
+from inspect import isfunction
+from functools import partial
 
 # n: 20171106 : changed-to: '.' = 0
 AA = {
@@ -54,139 +53,16 @@ import torch.nn.functional as F
 from einops import rearrange, reduce
 from torch import einsum, nn
 
-# helper functions
 
-
+# helper functions and classes
 def exists(val):
     return val is not None
 
 
-def moore_penrose_iter_pinv(x, iters=6):
-    device = x.device
-
-    abs_x = torch.abs(x)
-    col = abs_x.sum(dim=-1)
-    row = abs_x.sum(dim=-2)
-    z = rearrange(x, '... i j -> ... j i') / (torch.max(col) * torch.max(row))
-
-    I = torch.eye(x.shape[-1], device=device)
-    I = rearrange(I, 'i j -> () i j')
-
-    for _ in range(iters):
-        xz = x @ z
-        z = 0.25 * z @ (13 * I - (xz @ (15 * I - (xz @ (7 * I - xz)))))
-
-    return z
-
-
-# main class
-
-
-class NystromAttention(nn.Module):
-    def __init__(self, in_dim, out_dim, dim_head=64, heads=8, m=256, pinv_iterations=6, residual=True, eps=1e-8):
-        super().__init__()
-        self.eps = eps
-        inner_dim = heads * dim_head
-
-        self.m = m
-        self.pinv_iterations = pinv_iterations
-
-        self.heads = heads
-        self.scale = dim_head**-0.5
-        self.to_qkv = nn.Linear(in_dim, inner_dim * 3, bias=False)
-        self.to_out = nn.Linear(inner_dim, out_dim)
-
-        self.residual = residual
-        if residual:
-            self.res_conv = nn.Conv2d(heads, heads, 1, groups=heads, bias=False)
-
-    def forward(self, x, mask=None, return_attn=False):
-        print(f"pre_forward_Nystrom_input: x-> {x.shape}")
-        b, n, _, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
-
-        # pad so that sequence can be evenly divided into m landmarks
-
-        remainder = n % m
-        if remainder > 0:
-            padding = m - (n % m)
-            x = F.pad(x, (0, 0, 0, padding), value=0)
-
-            if exists(mask):
-                mask = F.pad(mask, (0, padding), value=False)
-
-        # derive query, keys, values
-
-        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
-
-        # set masked positions to 0 in queries, keys, values
-
-        if exists(mask):
-            mask = rearrange(mask, 'b n -> b () n')
-            q, k, v = map(lambda t: t * mask[..., None], (q, k, v))
-
-        q *= self.scale
-
-        # generate landmarks by sum reduction, and then calculate mean using the mask
-
-        l = ceil(n / m)
-        landmark_einops_eq = '... (n l) d -> ... n d'
-        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
-        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
-
-        # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
-
-        divisor = l
-        if exists(mask):
-            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l=l)
-            divisor = mask_landmarks_sum[..., None] + eps
-            mask_landmarks = mask_landmarks_sum > 0
-
-        # masked mean (if mask exists)
-
-        q_landmarks /= divisor
-        k_landmarks /= divisor
-
-        # similarities
-
-        einops_eq = '... i d, ... j d -> ... i j'
-        sim1 = einsum(einops_eq, q, k_landmarks)
-        sim2 = einsum(einops_eq, q_landmarks, k_landmarks)
-        sim3 = einsum(einops_eq, q_landmarks, k)
-
-        # masking
-
-        if exists(mask):
-            mask_value = -torch.finfo(q.dtype).max
-            sim1.masked_fill_(~(mask[..., None] * mask_landmarks[..., None, :]), mask_value)
-            sim2.masked_fill_(~(mask_landmarks[..., None] * mask_landmarks[..., None, :]), mask_value)
-            sim3.masked_fill_(~(mask_landmarks[..., None] * mask[..., None, :]), mask_value)
-
-        # eq (15) in the paper
-
-        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
-        attn2_inv = moore_penrose_iter_pinv(attn2, iters)
-        attn = attn1 @ attn2_inv @ attn3
-
-        # aggregate
-
-        out = einsum('... i j, ... j d -> ... i d', attn, v)
-
-        # add depth-wise conv residual of values
-
-        if self.residual:
-            out += self.res_conv(v)
-
-        # merge and combine heads
-
-        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
-        out = self.to_out(out)
-        out = out[:, :n]
-
-        if return_attn:
-            return out, attn
-
-        return out
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
 
 
 def cycle(loader, cond=lambda x: True):
@@ -195,6 +71,45 @@ def cycle(loader, cond=lambda x: True):
             if not cond(data):
                 continue
             yield data
+
+
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.fn = fn
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x, *args, **kwargs):
+        x = self.norm(x)
+        return self.fn(x, *args, **kwargs)
+
+
+class PreNormCross(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.fn = fn
+        self.norm = nn.LayerNorm(dim)
+        self.norm_context = nn.LayerNorm(dim)
+
+    def forward(self, x, context, *args, **kwargs):
+        x = self.norm(x)
+        context = self.norm_context(context)
+        return self.fn(x, context, *args, **kwargs)
+
+
+class GEGLU(nn.Module):
+    def forward(self, x):
+        x, gates = x.chunk(2, dim=-1)
+        return x * F.gelu(gates)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, dim, mult=4, dropout=0.):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(dim, dim * mult * 2), GEGLU(), nn.Dropout(dropout), nn.Linear(dim * mult, dim))
+
+    def forward(self, x):
+        return self.net(x)
 
 
 class SampleHackDataset(Dataset):
@@ -216,231 +131,23 @@ class SampleHackDataset(Dataset):
         return self.read_from_disk_return_x_y(item)
 
     def read_from_disk_return_x_y(self, item):
-        id = item["id"]
+        prot_id = item["id"]
         seq_len = item["seq_len"]
         msa_depth = item["msa_depth"]
         with open(self.seq_root / f"{id}.seq", "rb") as f:
             seq = np.load(f)
-            f.close()
         with open(self.msa_root / f"{id}.msa", "rb") as f:
             msa = np.load(f)
-            f.close()
         with open(self.sst_root / f"{id}.sst", "rb") as f:
             sst = np.load(f)
-            f.close()
 
-        #
-        return id, seq_len, msa_depth, seq, msa, sst
+        return prot_id, seq_len, msa_depth, seq, msa, sst
 
     def __len__(self):
         return self.meta.shape[0]
 
     def query(self, *args):
         return self.meta.query(*args)
-
-
-class SecondaryAttention(NystromAttention):
-    """ v0.1 attention
-    v0.2 sparseattention
-    """
-    def __init__(
-        self,
-        in_dim,
-        out_dim,
-        dim_head=64,
-        heads=8,
-        m=256,
-        pinv_iterations=6,
-        residual=True,
-        eps=1e-8,
-        ff_dropout=0.,
-    ):
-        super(SecondaryAttention, self).__init__(in_dim, out_dim, dim_head, heads, m, pinv_iterations, residual, eps)
-
-        self.dropout = nn.Dropout(ff_dropout)
-        self.in_norm = nn.LayerNorm(in_dim)
-
-    def forward(self, x, mask=None, return_attn=False):
-        b, n, _, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
-
-        x = self.in_norm(x)
-
-        # pad so that sequence can be evenly divided into m landmarks
-
-        remainder = n % m
-        if remainder > 0:
-            padding = m - (n % m)
-            x = F.pad(x, (0, 0, 0, padding), value=0)
-
-            if exists(mask):
-                mask = F.pad(mask, (0, padding), value=False)
-
-        # derive query, keys, values
-
-        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: self.in_norm(t), (q, k, v))
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
-
-        # set masked positions to 0 in queries, keys, values
-
-        if exists(mask):
-            mask = rearrange(mask, 'b n -> b () n')
-            q, k, v = map(lambda t: t * mask[..., None], (q, k, v))
-
-        q *= self.scale
-
-        # generate landmarks by sum reduction, and then calculate mean using the mask
-
-        l = ceil(n / m)
-        landmark_einops_eq = '... (n l) d -> ... n d'
-        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
-        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
-
-        # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
-
-        divisor = l
-        if exists(mask):
-            mask_landmarks_sum = reduce(mask, '... (n l) -> ... n', 'sum', l=l)
-            divisor = mask_landmarks_sum[..., None] + eps
-            mask_landmarks = mask_landmarks_sum > 0
-
-        # masked mean (if mask exists)
-
-        q_landmarks /= divisor
-        k_landmarks /= divisor
-
-        # similarities
-
-        einops_eq = '... i d, ... j d -> ... i j'
-        sim1 = einsum(einops_eq, q, k_landmarks)
-        sim2 = einsum(einops_eq, q_landmarks, k_landmarks)
-        sim3 = einsum(einops_eq, q_landmarks, k)
-
-        # masking
-
-        if exists(mask):
-            mask_value = -torch.finfo(q.dtype).max
-            sim1.masked_fill_(~(mask[..., None] * mask_landmarks[..., None, :]), mask_value)
-            sim2.masked_fill_(~(mask_landmarks[..., None] * mask_landmarks[..., None, :]), mask_value)
-            sim3.masked_fill_(~(mask_landmarks[..., None] * mask[..., None, :]), mask_value)
-
-        # eq (15) in the paper
-
-        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
-        attn2_inv = moore_penrose_iter_pinv(attn2, iters)
-        attn = attn1 @ attn2_inv @ attn3
-
-        # aggregate
-
-        out = einsum('... i j, ... j d -> ... i d', attn, v)
-
-        # add depth-wise conv residual of values
-
-        if self.residual:
-            out += self.res_conv(v)
-
-        # merge and combine heads
-
-        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
-        out = self.to_out(out)
-        out = out[:, :n]
-
-        if return_attn:
-            return out, attn
-
-        return out
-
-
-class SimpleHackAttention(nn.Module):
-    def __init__(self, num_class, in_dim=256, heads=8, head_dim=64, m=256, pinv_iterations=6, eps=1e-8):
-        super().__init__()
-        self.m = m
-        self.heads = heads
-        self.head_dim = head_dim
-        self.pinv_iterations = pinv_iterations
-        self.eps = eps
-        self.num_class = num_class
-        inner_dim = heads * head_dim
-        self.norm = nn.LayerNorm(in_dim)
-        self.to_qkv = nn.Linear(in_dim, inner_dim * 3, bias=False)
-        self.to_out = nn.Linear(inner_dim, num_class)
-
-    def forward(self, x, return_attn=False):
-        b, n, d, h, m, iters, eps = *x.shape, self.heads, self.m, self.pinv_iterations, self.eps
-
-        # pad so that sequence can be evenly divided into m landmarks
-
-        remainder = n % m
-        if remainder > 0:
-            padding = m - (n % m)
-            x = F.pad(x, (0, 0, 0, padding), value=0)
-
-        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
-
-        q *= self.scale
-        # generate landmarks by sum reduction, and then calculate mean using the mask
-        l = ceil(n / m)
-        landmark_einops_eq = '... (n l) d -> ... n d'
-        q_landmarks = reduce(q, landmark_einops_eq, 'sum', l=l)
-        k_landmarks = reduce(k, landmark_einops_eq, 'sum', l=l)
-        # calculate landmark mask, and also get sum of non-masked elements in preparation for masked mean
-        divisor = l
-
-        # mean
-
-        # similarities
-
-        einops_eq = '... i d, ... j d -> ... i j'
-        sim1 = einsum(einops_eq, q, k_landmarks)
-        sim2 = einsum(einops_eq, q_landmarks, k_landmarks)
-        sim3 = einsum(einops_eq, q_landmarks, k)
-        # eq(15) from the paper
-        attn1, attn2, attn3 = map(lambda t: t.softmax(dim=-1), (sim1, sim2, sim3))
-        attn2_inv = moore_penrose_iter_pinv(attn2, iters)
-        attn = attn1 @ attn2_inv @ attn3
-
-        # aggregate
-        out = einsum('... i j, ... j d -> ... i d', attn, v)
-
-        # merge and combine
-        out = rearrange(out, 'b h n d -> b n (h d)', h=h)
-        out = self.to_out(out)
-        out = out[:, :n]
-
-        return out, attn if return_attn else out
-
-
-class SSModule(nn.Module):
-    def __init__(self, num_class, **kwargs):
-        super().__init__()
-        # ff_dropout = kwargs.get('ff_dropout', 0.)
-        # prenorm_256 = partial(PreNorm, 256)
-        # prenorm_64 = partial(PreNorm, 64)
-        # prenorm_8 = partial(PreNorm, 8)
-
-        # self.q1 = SecondaryAttention(in_dim=256, out_dim=64, heads=8, dim_head=8, m=32, ff_dropout=ff_dropout)
-        # self.ff1 = FeedForward(dim=64, dropout=ff_dropout)
-        # self.q2 = SecondaryAttention(in_dim=64, out_dim=8, heads=4, dim_head=2, ff_dropout=ff_dropout)
-        # self.ff2 = FeedForward(dim=8, dropout=ff_dropout)
-
-        # self.out = nn.Sequential(nn.LayerNorm(8), nn.Linear(8, num_class))
-        self.sha = SimpleHackAttention(num_class, **kwargs)
-
-    def forward(self, x):
-        # # print(f'pre_ssp_forward: x.shape -> {x.shape}')
-        # x = self.q1(x)
-        # # print(f'post_ssp_q1: x.shape -> {x.shape}')
-        # x = self.ff1(x)
-        # # print(f'post_ssp_ff1: x.shape -> {x.shape}')
-        # x = self.q2(x)
-        # # print(f'post_ssp_q2: x.shape -> {x.shape}')
-        # x = self.ff2(x)
-        # # print(f'post_ssp_ff1: x.shape -> {x.shape}')
-        # x = self.out(x)
-        # # print(f'post_ssp_out: x.shape -> {x.shape}')
-        x = self.sha(x)
-        return x
 
 
 def rand_choice(orginal_size: int, target_size: int, container):
@@ -456,23 +163,19 @@ def rand_chunk(max_depth, size, container):
     return res
 
 
+class TransPorter(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+
 def test(root: str):
     root = Path(root)
     device = torch.device('cuda:0')
     ds = SampleHackDataset(root / "sample.csv", root / "msa", root / "seq", root / "sst")
-    af2 = Alphafold2(
-        dim=256,
-        depth=6,
-        heads=8,
-        dim_head=64,
-        num_tokens=constants.NUM_AMINO_ACIDS_EXP,
-        sparse_self_attn=True,
-        cross_attn_compress_ratio=3,
-        reversible=True,
-    ).cuda()
-    ssp = SSModule(num_class=NUM_SS_CLASS, in_dim=256).cuda()
 
-    optim = torch.optim.Adam(list(af2.parameters()) + list(ssp.parameters()), lr=LEARNING_RATE)
+    tp = TransPorter(num_class=NUM_SS_CLASS, in_dim=256).cuda()
+
+    optim = torch.optim.Adam(tp.parameters(), lr=LEARNING_RATE)
     lossFn = nn.CrossEntropyLoss()
     from torch.utils.tensorboard import SummaryWriter
     writer = SummaryWriter()
@@ -533,10 +236,9 @@ def test(root: str):
         tloss = 0
         for i in range(k):
             n_seq, n_msa, cut_off = reshape_input(seq, msa, sst, i)
-            trunk, *_ = af2(
+            ss, *_ = tp(
                 seq=n_seq, msa=n_msa, ss_only=True, msa_col_pos=msa_col_idxs[i], msa_row_pos=msa_row_idxs[i], seq_pos=i * l
             )
-            ss = ssp(trunk)
             ss, ss_t = reshape_output(sst, i, cut_off, ss)
             loss = lossFn(ss, ss_t)
             tloss += loss
