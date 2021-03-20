@@ -70,7 +70,7 @@ for _ in range(NUM_BATCHES):
 
         # prepare mask, labels
 
-        seq, coords, mask = seq.armax(dim = -1).to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
+        seq, coords, mask = seq.argmax(dim = -1).to(DEVICE), coords.to(DEVICE), mask.to(DEVICE).bool()
         coords = rearrange(coords, 'b (l c) d -> b l c d', l = l)
 
         discretized_distances = get_bucketed_distance_matrix(coords[:, :, 0], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
