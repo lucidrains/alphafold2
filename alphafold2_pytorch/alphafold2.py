@@ -39,21 +39,22 @@ def cast_tuple(val, depth):
 
 # helper classes
 
-class ScaleNorm(nn.Module):
-    def __init__(self, dim, eps = 1e-5):
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps = 1e-8):
         super().__init__()
+        self.scale = dim ** -0.5
         self.eps = eps
-        self.g = nn.Parameter(torch.ones(1))
+        self.g = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        n = torch.norm(x, dim = -1, keepdim = True).clamp(min = self.eps)
-        return x / n * self.g
+        norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
+        return x / norm.clamp(min = self.eps) * self.g
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
         self.fn = fn
-        self.norm = ScaleNorm(dim)
+        self.norm = RMSNorm(dim)
 
     def forward(self, x, *args, **kwargs):
         x = self.norm(x)
@@ -63,8 +64,8 @@ class PreNormCross(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
         self.fn = fn
-        self.norm = ScaleNorm(dim)
-        self.norm_context = ScaleNorm(dim)
+        self.norm = RMSNorm(dim)
+        self.norm_context = RMSNorm(dim)
 
     def forward(self, x, context, *args, **kwargs):
         x = self.norm(x)
@@ -695,7 +696,7 @@ class Alphafold2(nn.Module):
         dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
 
         self.to_distogram_logits = nn.Sequential(
-            ScaleNorm(dim),
+            RMSNorm(dim),
             nn.Sequential(
                 nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
                 Rearrange('b h w c -> b c h w'),
