@@ -229,7 +229,7 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     scn_seq = expand_dims_to(scn_seq, 2 - len(scn_seq.shape))
     # early check for coords mask
     if coords is not None: 
-        batch_mask = ( rearrange(coords, 'b (l c) d -> b l c d', c=14) != 0 ).sum(dim=-1) == 0
+        batch_mask = ( rearrange(coords, '... (l c) d -> ... l c d', c=14) == 0 ).sum(dim=-1) < coords.shape[-1]
         if boolean:
             return batch_mask.bool()
         else: 
@@ -246,7 +246,6 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
     # return mask (boolean or indexes)
-    if coords is None:
     if boolean:
         return batch_mask.bool()
     else: 
