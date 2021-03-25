@@ -726,6 +726,9 @@ class Alphafold2(nn.Module):
                     fourier_features = 2
                 )
 
+        # aux confidence measure
+        self.lddt_linear = nn.linear(structure_module_dim, 1)
+
     def forward(
         self,
         seq,
@@ -738,7 +741,8 @@ class Alphafold2(nn.Module):
         templates_coors = None,
         templates_sidechains = None,
         embedds = None,
-        return_trunk = False
+        return_trunk = False,
+        return_confidence = False
     ):
         n, device = seq.shape[1], seq.device
         n_range = torch.arange(n, device = device)
@@ -943,5 +947,8 @@ class Alphafold2(nn.Module):
 
         if self.return_aux_logits:
             return coords, ret
+
+        if return_confidence:
+            return coords, self.lddt_linear(x)
 
         return coords
