@@ -1,6 +1,9 @@
+import sys
+
+sys.path.append("../alphadold2_pytorch/")
 import torch
-from alphafold2_pytorch.alphafold2 import Alphafold2
-from alphafold2_pytorch.utils import *
+from alphafold2 import Alphafold2
+from utils import *
 
 def test_main():
     model = Alphafold2(
@@ -125,36 +128,6 @@ def test_coords_se3():
 
     assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
 
-def test_real_value_distance_with_coords():
-    model = Alphafold2(
-        dim = 256,
-        depth = 2,
-        heads = 8,
-        dim_head = 64,
-        predict_coords = True,
-        predict_real_value_distances = True,
-        num_backbone_atoms = 3,
-        structure_module_dim = 1,
-        structure_module_depth = 1,
-        structure_module_heads = 1,
-        structure_module_dim_head = 1,
-    )
-
-    seq = torch.randint(0, 21, (2, 16))
-    mask = torch.ones_like(seq).bool()
-
-    msa = torch.randint(0, 21, (2, 5, 32))
-    msa_mask = torch.ones_like(msa).bool()
-
-    coords = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-
-    assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
-
 def test_coords_se3_backwards():
     model = Alphafold2(
         dim = 256,
@@ -209,7 +182,6 @@ def test_coords_En():
         msa_mask = msa_mask
     )
     # get masks : cloud is all points in prot. chain is all for which we have labels
-    cloud_mask = scn_cloud_mask(seq)
     cloud_mask = scn_cloud_mask(seq, boolean = True)
     flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
     chain_mask = (mask.unsqueeze(-1) * cloud_mask)
@@ -248,6 +220,35 @@ def test_coords_En_backwards():
 
     coords.sum().backward()
     assert True, 'must be able to go backwards through MDS and center distogram'
+
+
+def test_confidence_En():
+    model = Alphafold2(
+        dim = 256,
+        depth = 1,
+        heads = 8,
+        dim_head = 64,
+        use_se3_transformer = False,
+        predict_coords = True,
+        num_backbone_atoms = 3
+    )
+
+    seq = torch.randint(0, 21, (2, 16))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 32))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords, confidences = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        return_confidence = True
+    )
+    
+    assert coords.shape[:-1] == confidences.shape[:-1]
+
 
 def test_reversible():
     model = Alphafold2(

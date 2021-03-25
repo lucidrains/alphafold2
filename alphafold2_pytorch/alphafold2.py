@@ -727,7 +727,7 @@ class Alphafold2(nn.Module):
                 )
 
         # aux confidence measure
-        self.lddt_linear = nn.linear(structure_module_dim, 1)
+        self.lddt_linear = nn.Linear(structure_module_dim, 1)
 
     def forward(
         self,
@@ -949,6 +949,6 @@ class Alphafold2(nn.Module):
             return coords, ret
 
         if return_confidence:
-            return coords, self.lddt_linear(x)
+            return coords, self.lddt_linear(x.float())
 
         return coords
