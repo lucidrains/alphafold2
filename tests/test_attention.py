@@ -1,9 +1,6 @@
-import sys
-
-sys.path.append("../alphadold2_pytorch/")
 import torch
-from alphafold2 import Alphafold2
-from utils import *
+from alphafold2_pytorch.alphafold2 import Alphafold2
+from alphafold2_pytorch.utils import *
 
 def test_main():
     model = Alphafold2(
@@ -248,7 +245,7 @@ def test_confidence_En():
     )
     
     assert coords.shape[:-1] == confidences.shape[:-1]
-
+    
 
 def test_reversible():
     model = Alphafold2(
