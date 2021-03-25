@@ -890,15 +890,15 @@ class Alphafold2(nn.Module):
 
         assert self.num_backbone_atoms > 1, 'must constitute to at least 3 atomic coordinates for backbone'
 
-        if self.num_backbone_atoms >= 3:
-            N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_backbone_atoms)
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_backbone_atoms)
 
-            cloud_mask = scn_cloud_mask(seq, boolean = True)
-            flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
-            chain_mask = (mask.unsqueeze(-1) * cloud_mask)
-            flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
+        cloud_mask = scn_cloud_mask(seq, boolean = True)
+        flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
+        chain_mask = (mask.unsqueeze(-1) * cloud_mask)
+        flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-            bb_mask = rearrange(chain_mask[:, :, :self.num_backbone_atoms], 'b l c -> b (l c)')
+        bb_mask = rearrange(chain_mask[:, :, :self.num_backbone_atoms], 'b l c -> b (l c)')
+        bb_mask_crossed = rearrange(bb_mask, 'b i -> b i ()') * rearrange(bb_mask, 'b j -> b () j')
 
         # structural refinement
 
@@ -908,10 +908,7 @@ class Alphafold2(nn.Module):
         else:
             distances, weights = center_distogram_torch(distance_pred)
 
-        paddings = (seq == 20).sum(dim=-1)
-        for i,pad in enumerate(paddings):
-            if pad > 0:
-                weights[i, -pad:, -pad:] = 0.
+        weights.masked_fill_(bb_mask_crossed, 0.)
 
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
