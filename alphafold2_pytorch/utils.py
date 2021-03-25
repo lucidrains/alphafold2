@@ -220,17 +220,28 @@ def coords2pdb(seq, coords, cloud_mask, prefix="", name="af2_struct.pdb"):
 
 # sidechainnet utils
 
-def scn_cloud_mask(scn_seq, boolean=True):
+def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     """ Gets the boolean mask atom positions (not all aas have same atoms). 
         Inputs: 
         * scn_seq: (batch, length) sequence as provided by Sidechainnet package
         * boolean: whether to return as array of idxs or boolean values
+        * coords: optional .(batch, lc, 3). sidechainnet coords.
+                  returns the true mask (solves potential atoms that might not be provided)
         Outputs: (batch, length, NUM_COORDS_PER_RES) boolean mask 
     """
+
     scn_seq = expand_dims_to(scn_seq, 2 - len(scn_seq.shape))
+    # early check for coords mask
+    if coords is not None: 
+        batch_mask = ( rearrange(coords, 'b (l c) d -> b l c d', c=14) != 0 ).sum(dim=-1) == 0
+        if boolean:
+            return batch_mask.bool()
+        else: 
+            return batch_mask.nonzero()
+
+    # do loop in cpu
     device = scn_seq.device
     batch_mask = []
-    # do loop in cpu
     scn_seq = scn_seq.cpu()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
@@ -238,9 +249,14 @@ def scn_cloud_mask(scn_seq, boolean=True):
                                          for aa in seq]).bool().to(device).unsqueeze(0) )
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
+    # return mask (boolean or indexes)
+    if coords is None:
     if boolean:
         return batch_mask.bool()
-    return batch_mask.nonzero()
+    else: 
+        return batch_mask.nonzero()
+
+    
 
 def scn_backbone_mask(scn_seq, boolean=True, n_aa=3):
     """ Gets the boolean mask for N and CA positions. 
