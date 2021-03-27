@@ -216,6 +216,37 @@ def coords2pdb(seq, coords, cloud_mask, prefix="", name="af2_struct.pdb"):
 
 # sidechainnet utils
 
+
+def get_all_protein_ids(dataloader, verbose=False):
+    """ Given a sidechainnet dataloader for a CASP version, 
+        Returns all the ids belonging to proteins.
+        Inputs: 
+        * dataloader: a sidechainnet dataloader for a CASP version
+        Outputs: a set containing the ids for all protein entries. 
+    """
+    # store ids here
+    ids = set([])
+    # iterate for all batches
+    for i,batch in tqdm(enumerate(dataloaders['train'])):
+        # for breaking from 2 loops at once
+        try:
+            for i in range(batch.int_seqs.shape[0]):
+                # check if all fragments are : 4_LETTER_PDB + NUM + CHAIN
+                max_len_10 = len(batch.pids[i]) < 10 
+                fragments  = [len(x) <= 4 for x in batch.pids[i].split("_")] 
+                fragments_under_4 = sum(fragments) == len(fragments) # AND CONDITION
+                # record id 
+                if max_len_10 and fragments_under_4:
+                    ids.add(batch.pids[i])
+                else: 
+                    if verbose:
+                        print("skip:", batch.pids[i], "under 4", fragments)
+        except StopIteration:
+            break
+    # returns set of ids
+    return ids
+    
+
 def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     """ Gets the boolean mask atom positions (not all aas have same atoms). 
         Inputs: 
