@@ -777,11 +777,19 @@ class Alphafold2(nn.Module):
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
+            
+            # get msa_mask to all ones if none was passed
+            msa_mask = default(msa_mask, torch.ones_like(msa).bool())
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-            m = rearrange(m, 'b i d -> b i () d') + rearrange(m, 'b j d -> b () j d')
+            m += self.msa_pos_emb(torch.arange(embedds.shape[-2], device = device))[None, None, ...]
+
+            msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
+            
+            # get msa_mask to all ones if none was passed
+            msa_mask = default(msa_mask, torch.ones_like(embedds[..., -1]).bool())
 
         if exists(msa_mask):
             msa_mask = rearrange(msa_mask, 'b m n -> b (m n)')
