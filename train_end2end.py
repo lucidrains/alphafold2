@@ -55,13 +55,6 @@ def cycle(loader, cond = lambda x: True):
                 continue
             yield data
 
-def get_esm_embedd(seq):
-    str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
-    batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
-    with torch.no_grad():
-        results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
-    return results["representations"][33].to(DEVICE)
-
 # get data
 
 data = scn.load(
@@ -117,7 +110,7 @@ for _ in range(NUM_BATCHES):
 
         # get embedds
         if FEATURES == "esm":
-            embedds = get_esm_embedd(seq)
+            embedds = get_esm_embedd(seq, embedd_model, batch_converter)
         # get msa here
         elif FEATURES == "msa":
             pass 
