@@ -216,18 +216,25 @@ def coords2pdb(seq, coords, cloud_mask, prefix="", name="af2_struct.pdb"):
 
 # sidechainnet / other data utils
 
-def get_esm_embedd(seq, embedd_model, batch_converter):
+def get_esm_embedd(seq, embedd_model, batch_converter, embedd_type="per_tok"):
     """ Returns the ESM embeddings for a protein. 
         Inputs: 
         * seq: (L,) tensor of ints (in sidechainnet int-char convention)
-        * embedd_model: ESM model
-        * batch_converter: ESM batch converter
+        * embedd_model: ESM model (see train_end2end.py for an example)
+        * batch_converter: ESM batch converter (see train_end2end.py for an example)
+        * embedd_type: one of ["mean", "per_tok"]. 
+                       "per_tok" is recommended if working with sequences.
     """
     str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
     batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
     with torch.no_grad():
         results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
-    return results["representations"][33].to(seq.device)
+    # index 0 is for start token. so take from 1 one
+    token_reps = results["representations"][33][ 1 : len(str_seq) + 1].to(seq.device)
+    if embedd_type == "mean":
+        token_reps = token_reps.mean(dim=0)
+    return token_reps
+
 
 
 def get_all_protein_ids(dataloader, verbose=False):
