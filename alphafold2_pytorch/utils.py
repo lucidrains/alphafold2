@@ -687,24 +687,27 @@ def calc_phis_numpy(pred_coords, N_mask, CA_mask, C_mask=None,
 # alignment by centering + rotation to compute optimal RMSD
 # adapted from : https://github.com/charnley/rmsd/
 
-def kabsch_torch(X, Y):
+def kabsch_torch(X, Y, cpu=True):
     """ Kabsch alignment of X into Y. 
         Assumes X,Y are both (Dims x N_points). See below for wrapper.
     """
+    device = X.device
     #  center X and Y to the origin
     X_ = X - X.mean(dim=-1, keepdim=True)
     Y_ = Y - Y.mean(dim=-1, keepdim=True)
     # calculate convariance matrix (for each prot in the batch)
-    C = torch.matmul(X_, Y_.t())
+    C = torch.matmul(X_, Y_.t()).detach()
+    if cpu: 
+        C = C.cpu()
     # Optimal rotation matrix via SVD - warning! W must be transposed
-    V, S, W = torch.svd(C.detach())
+    V, S, W = torch.svd(C)
     # determinant sign for direction correction
     d = (torch.det(V) * torch.det(W)) < 0.0
     if d:
         S[-1]    = S[-1] * (-1)
         V[:, -1] = V[:, -1] * (-1)
     # Create Rotation matrix U
-    U = torch.matmul(V, W.t())
+    U = torch.matmul(V, W.t()).to(device)
     # calculate rotations
     X_ = torch.matmul(X_.t(), U).t()
     # return centered and aligned
