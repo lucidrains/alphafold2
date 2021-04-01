@@ -739,6 +739,22 @@ def kabsch_numpy(X, Y):
 
 # metrics - more formulas here: http://predictioncenter.org/casp12/doc/help.html
 
+def distmat_loss_torch(X, Y, p=2, q=2):
+    """ Calculates a loss on the distance matrix - no need to align structs.
+        Inputs: 
+        * X: (N, d) tensor. the predicted stricture 
+        * Y: (N, d) tensor. the true structure
+        * p: int. power for the distance calculation
+        * q: float. power for the scaling of the loss (2 for MSE, 1 for MAE, etc)
+    """
+    pred_distmat = torch.cdist(X, X, p=p)
+    true_distmat = torch.cdist(Y, Y, p=p)
+    # ^2 ensures always positive. Later scale back to desired power
+    loss = (pred_distmat - true_distmat)**2 
+    if q != 2:
+        loss = loss**(q/2)
+    return loss.mean()
+
 def rmsd_torch(X, Y):
     """ Assumes x,y are both (B x D x N). See below for wrapper. """
     return torch.sqrt( torch.mean((X - Y)**2, axis=(-1, -2)) )

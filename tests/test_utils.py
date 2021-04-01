@@ -73,6 +73,12 @@ def test_sidechain_container():
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 
+def test_distmat_loss():
+    a = torch.randn(2, 137, 14, 3)
+    b = torch.randn(2, 137, 14, 3)
+    loss = distmat_loss_torch(a, b, p=2, q=2) # mse on distmat
+    assert True
+
 def test_lddt():
     a = torch.randn(2, 137, 14, 3)
     b = torch.randn(2, 137, 14, 3)
