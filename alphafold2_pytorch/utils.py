@@ -744,13 +744,11 @@ def distmat_loss_torch(X, Y, p=2, q=2):
         Inputs: 
         * X: (N, d) tensor. the predicted stricture 
         * Y: (N, d) tensor. the true structure
-        * p: int. power for the distance calculation
+        * p: int. power for the distance calculation (2 for euclidean)
         * q: float. power for the scaling of the loss (2 for MSE, 1 for MAE, etc)
     """
-    pred_distmat = torch.cdist(X, X, p=p)
-    true_distmat = torch.cdist(Y, Y, p=p)
-    # ^2 ensures always positive. Later scale back to desired power
-    loss = (pred_distmat - true_distmat)**2 
+    # **2 ensures always positive. Later scale back to desired power
+    loss = ( torch.cdist(X, X, p=p) - torch.cdist(Y, Y, p=p) )**2 
     if q != 2:
         loss = loss**(q/2)
     return loss.mean()
