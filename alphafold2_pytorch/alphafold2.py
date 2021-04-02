@@ -958,7 +958,9 @@ class Alphafold2(nn.Module):
 
         i = torch.arange(x.shape[1], device = device)
         adj_mat = (i[:, None] >= (i[None, :] - 1)) & (i[:, None] <= (i[None, :] + 1))
-        print(adj_mat.shape)
+
+        # /adjacency mat calc - above should be pre-calculated and cached in a buffer
+
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
                 x, coords = self.structure_module(x, coords, mask = flat_chain_mask, adj_mat = adj_mat)
