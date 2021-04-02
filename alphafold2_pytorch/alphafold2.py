@@ -478,8 +478,8 @@ class SE3TransformerWrapper(nn.Module):
         self.net = SE3Transformer(*args, **kwargs)
         self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
 
-    def forward(self, x, coords, mask = None):
-        output = self.net(x, coords, mask = mask)
+    def forward(self, x, coords, mask = None, adj_mat = None):
+        output = self.net(x, coords, mask = mask, adj_mat = adj_mat)
         x, refined_coords = output['0'], output['1']
 
         refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
@@ -562,7 +562,8 @@ class Alphafold2(nn.Module):
         structure_module_heads = 1,
         structure_module_dim_head = 16,
         structure_module_refinement_iters = 2,
-        structure_module_knn = 8
+        structure_module_knn = 8,
+        structure_module_adj_neighbors = 2
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
@@ -713,15 +714,22 @@ class Alphafold2(nn.Module):
                     num_degrees = 3,
                     output_degrees = 2,
                     heads = structure_module_heads,
-                    num_neighbors = structure_module_knn,
-                    differentiable_coors = True
+                    differentiable_coors = True,
+                    num_neighbors = 0, # use only bonded neighbors for now
+                    attend_sparse_neighbors = True,
+                    num_adj_degrees = structure_module_adj_neighbors,
+                    adj_dim = 4,
                 )
             else:
                 self.structure_module = EnTransformer(
                     dim = structure_module_dim,
                     depth = structure_module_depth,
                     heads = structure_module_heads,
-                    fourier_features = 2
+                    fourier_features = 2,
+                    num_nearest_neighbors = 0,
+                    only_sparse_neighbors = True,
+                    num_adj_degrees = structure_module_adj_neighbors,
+                    adj_dim = 4
                 )
 
         # aux confidence measure
@@ -935,7 +943,6 @@ class Alphafold2(nn.Module):
         coords = rearrange(coords, 'b n l d -> b (n l) d')
         atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
-        
         trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
@@ -946,9 +953,15 @@ class Alphafold2(nn.Module):
         original_dtype = coords.dtype
         x, coords = map(lambda t: t.double(), (x, coords))
 
+        # derive adjacency matrix
+        # todo - fix so Cbeta is connected correctly
+
+        i = torch.arange(x.shape[1], device = device)
+        adj_mat = (i[:, None] >= (i[None, :] - 1)) & (i[:, None] <= (i[None, :] + 1))
+        print(adj_mat.shape)
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                x, coords = self.structure_module(x, coords, mask = flat_chain_mask)
+                x, coords = self.structure_module(x, coords, mask = flat_chain_mask, adj_mat = adj_mat)
 
         coords.type(original_dtype)
 
