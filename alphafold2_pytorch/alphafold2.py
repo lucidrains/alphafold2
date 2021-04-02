@@ -354,11 +354,9 @@ class SparseAttention(Attention):
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-
         key_pad_mask = None
         if exists(mask):
-            key_pad_mask = ~mask
+            key_pad_mask = repeat(~mask, 'b n -> b h n', h = h)
 
         out = self.attn_fn(q, k, v, key_padding_mask = key_pad_mask)
         out = rearrange(out, 'b h n d -> b n (h d)')
