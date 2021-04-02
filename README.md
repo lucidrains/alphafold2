@@ -28,8 +28,8 @@ model = Alphafold2(
     reversible = False  # set this to True for fully reversible self / cross attention for the trunk
 ).cuda()
 
-seq = torch.randint(0, 21, (1, 128)).cuda()
-msa = torch.randint(0, 21, (1, 5, 64)).cuda()
+seq = torch.randint(0, 21, (1, 128)).cuda()      # AA length of 128
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()   # MSA doesn't have to be the same length as primary sequence
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
@@ -56,7 +56,7 @@ model = Alphafold2(
 ).cuda()
 
 seq = torch.randint(0, 21, (1, 128)).cuda()
-msa = torch.randint(0, 21, (1, 5, 64)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
@@ -99,7 +99,7 @@ model = Alphafold2(
 ).cuda()
 
 seq = torch.randint(0, 21, (2, 64)).cuda()
-msa = torch.randint(0, 21, (2, 5, 32)).cuda()
+msa = torch.randint(0, 21, (2, 5, 60)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
@@ -138,7 +138,7 @@ model = Alphafold2(
 ).cuda()
 
 seq = torch.randint(0, 21, (2, 64)).cuda()
-msa = torch.randint(0, 21, (2, 5, 32)).cuda()
+msa = torch.randint(0, 21, (2, 5, 60)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
 msa_mask = torch.ones_like(msa).bool().cuda()
 
