@@ -777,7 +777,7 @@ class Alphafold2(nn.Module):
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
-            
+
             # get msa_mask to all ones if none was passed
             msa_mask = default(msa_mask, torch.ones_like(msa).bool())
 
@@ -909,8 +909,8 @@ class Alphafold2(nn.Module):
         chain_mask = (mask.unsqueeze(-1) * cloud_mask)
         flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-        bb_mask = rearrange(chain_mask[:, :, :self.num_backbone_atoms], 'b l c -> b (l c)')
-        bb_mask_crossed = rearrange(bb_mask, 'b i -> b i ()') * rearrange(bb_mask, 'b j -> b () j')
+        bb_flat_mask = rearrange(chain_mask[... :self.num_backbone_atoms], 'b l c -> b (l c)')
+        bb_flat_mask_crossed = rearrange(bb_mask, 'b i -> b i ()') * rearrange(bb_mask, 'b j -> b () j')
 
         # structural refinement
 
@@ -920,7 +920,8 @@ class Alphafold2(nn.Module):
         else:
             distances, weights = center_distogram_torch(distance_pred)
 
-        weights.masked_fill_(bb_mask_crossed, 0.)
+        # set unwanted atoms to w=0 (like C-beta in glycine)
+        weights.masked_fill_( torch.logical_not(bb_mask_crossed), 0.)
 
         coords_3d, _ = MDScaling(distances, 
             weights = weights,
