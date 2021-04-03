@@ -490,7 +490,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     # start
     batch, N, _ = pre_dist_mat.shape
     diag_idxs = np.arange(N)
-    his = []
+    his = [torch.tensor([np.inf])]
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device).type(dtype)
     best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1
@@ -537,7 +537,7 @@ def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
     # start
     batch, N, _ = pre_dist_mat.shape
-    his = []
+    his = [np.inf]
     # init random coords
     best_stress = np.inf * np.ones(batch)
     best_3d_coords = 2*np.random.rand(batch, 3, N) - 1
