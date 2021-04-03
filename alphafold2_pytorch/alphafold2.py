@@ -354,11 +354,9 @@ class SparseAttention(Attention):
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-
         key_pad_mask = None
         if exists(mask):
-            key_pad_mask = ~mask
+            key_pad_mask = repeat(~mask, 'b n -> b h n', h = h)
 
         out = self.attn_fn(q, k, v, key_padding_mask = key_pad_mask)
         out = rearrange(out, 'b h n d -> b n (h d)')
@@ -480,8 +478,8 @@ class SE3TransformerWrapper(nn.Module):
         self.net = SE3Transformer(*args, **kwargs)
         self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
 
-    def forward(self, x, coords, mask = None):
-        output = self.net(x, coords, mask = mask)
+    def forward(self, x, coords, mask = None, adj_mat = None):
+        output = self.net(x, coords, mask = mask, adj_mat = adj_mat)
         x, refined_coords = output['0'], output['1']
 
         refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
@@ -564,7 +562,8 @@ class Alphafold2(nn.Module):
         structure_module_heads = 1,
         structure_module_dim_head = 16,
         structure_module_refinement_iters = 2,
-        structure_module_knn = 8
+        structure_module_knn = 8,
+        structure_module_adj_neighbors = 2
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
@@ -653,7 +652,7 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = (max_seq_len, max_seq_len, max_num_templates), heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn))),
                 prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
@@ -715,15 +714,22 @@ class Alphafold2(nn.Module):
                     num_degrees = 3,
                     output_degrees = 2,
                     heads = structure_module_heads,
-                    num_neighbors = structure_module_knn,
-                    differentiable_coors = True
+                    differentiable_coors = True,
+                    num_neighbors = 0, # use only bonded neighbors for now
+                    attend_sparse_neighbors = True,
+                    num_adj_degrees = structure_module_adj_neighbors,
+                    adj_dim = 4,
                 )
             else:
                 self.structure_module = EnTransformer(
                     dim = structure_module_dim,
                     depth = structure_module_depth,
                     heads = structure_module_heads,
-                    fourier_features = 2
+                    fourier_features = 2,
+                    num_nearest_neighbors = 0,
+                    only_sparse_neighbors = True,
+                    num_adj_degrees = structure_module_adj_neighbors,
+                    adj_dim = 4
                 )
 
         # aux confidence measure
@@ -937,7 +943,6 @@ class Alphafold2(nn.Module):
         coords = rearrange(coords, 'b n l d -> b (n l) d')
         atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
-        
         trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
@@ -948,9 +953,17 @@ class Alphafold2(nn.Module):
         original_dtype = coords.dtype
         x, coords = map(lambda t: t.double(), (x, coords))
 
+        # derive adjacency matrix
+        # todo - fix so Cbeta is connected correctly
+
+        i = torch.arange(x.shape[1], device = device)
+        adj_mat = (i[:, None] >= (i[None, :] - 1)) & (i[:, None] <= (i[None, :] + 1))
+
+        # /adjacency mat calc - above should be pre-calculated and cached in a buffer
+
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                x, coords = self.structure_module(x, coords, mask = flat_chain_mask)
+                x, coords = self.structure_module(x, coords, mask = flat_chain_mask, adj_mat = adj_mat)
 
         coords.type(original_dtype)
 
