@@ -253,7 +253,7 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_typ
     str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
     # use MSA transformer
     if msa_data is not None: 
-        msa_batch_labels, msa_batch_strs, msa_batch_tokens = msa_batch_converter(msa_data)
+        msa_batch_labels, msa_batch_strs, msa_batch_tokens = batch_converter(msa_data)
         with torch.no_grad():
             results = embedd_model(msa_batch_tokens.to(seq.device), repr_layers=[12], return_contacts=False)
         # index 0 is for start token. so take from 1 one
