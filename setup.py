@@ -26,7 +26,8 @@ setup(
     'se3-transformer-pytorch>=0.2.1',
     'sidechainnet',
     'torch>=1.6',
-    'tqdm'
+    'tqdm',
+    'biopython'
   ],
   setup_requires=[
     'pytest-runner',

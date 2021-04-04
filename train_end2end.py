@@ -21,7 +21,7 @@ from alphafold2_pytorch.utils import *
 
 # constants
 
-FEATURES = "esm" # one of ["esm", "msa", None]
+FEATURES = "esm" # one of ["esm", "msa", "msa_transformer", None]
 DEVICE = None # defaults to cuda if available, else cpu
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
@@ -45,6 +45,16 @@ if FEATURES == "esm":
     # import esm # after installing esm
     # model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
     batch_converter = alphabet.get_batch_converter()
+
+elif FEATURES == "msa_transformer":
+    embedd_model, alphabet = torch.hub.load("facebookresearch/esm", "esm_msa1_t12_100M_UR50S") 
+    batch_converter = alphabet.get_batch_converter()
+    ##  alternatively do
+    # import esm # after installing esm
+    # model, alphabet = esm.pretrained.esm_msa1_t12_100M_UR50S()
+    # batch_converter = alphabet.get_batch_converter()
+
+
 
 # helpers
 

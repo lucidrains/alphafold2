@@ -5,6 +5,11 @@ import torch
 from functools import wraps
 from einops import rearrange, repeat
 
+# bio 
+from Bio import SeqIO
+import itertools
+import string
+
 # sidechainnet
 
 from sidechainnet.utils.sequence import ProteinVocabulary, ONE_TO_THREE_LETTER_MAP
@@ -214,9 +219,25 @@ def coords2pdb(seq, coords, cloud_mask, prefix="", name="af2_struct.pdb"):
     pred.to_pdb(prefix+name)
 
 
-# sidechainnet / other data utils
+# adapted from https://github.com/facebookresearch/esm
 
-def get_esm_embedd(seq, embedd_model, batch_converter, embedd_type="per_tok"):
+def remove_insertions(sequence: str) -> str:
+    """ Removes any insertions into the sequence. Needed to load aligned sequences in an MSA. """
+    deletekeys = dict.fromkeys(string.ascii_lowercase)
+    deletekeys["."] = None
+    deletekeys["*"] = None
+    translation = str.maketrans(deletekeys)
+    return sequence.translate(translation)
+
+def read_msa(filename: str, nseq: int):
+    """ Reads the first nseq sequences from an MSA file, automatically removes insertions."""
+    return [(record.description, remove_insertions(str(record.seq)))
+            for record in itertools.islice(SeqIO.parse(filename, "fasta"), nseq)]
+
+
+# sidechainnet / MSA / other data utils
+
+def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_type="per_tok"):
     """ Returns the ESM embeddings for a protein. 
         Inputs: 
         * seq: (L,) tensor of ints (in sidechainnet int-char convention)
@@ -224,14 +245,29 @@ def get_esm_embedd(seq, embedd_model, batch_converter, embedd_type="per_tok"):
         * batch_converter: ESM batch converter (see train_end2end.py for an example)
         * embedd_type: one of ["mean", "per_tok"]. 
                        "per_tok" is recommended if working with sequences.
-        Outputs: tensor of (L, 1280)
+        Outputs: tensor of (batch, n_seqs, L, embedd_dim)
+            * n_seqs: number of sequences in the MSA. 1 for ESM-1b
+            * embedd_dim: number of embedding dimensions. 
+                          768 for MSA_Transformer and 1280 for ESM-1b
     """
     str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
-    batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
-    with torch.no_grad():
-        results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
-    # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][33][ 0, 1 : len(str_seq) + 1].to(seq.device)
+    # use MSA transformer
+    if msa_data is not None: 
+        msa_batch_labels, msa_batch_strs, msa_batch_tokens = msa_batch_converter(msa_data)
+        with torch.no_grad():
+            results = embedd_model(msa_batch_tokens.to(seq.device), repr_layers=[12], return_contacts=False)
+        # index 0 is for start token. so take from 1 one
+        token_reps = results["representations"][12][0, :,  1 : len(str_seq) + 1]
+        
+    # base ESM case
+    else: 
+        batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
+        with torch.no_grad():
+            results = embedd_model(batch_tokens.to(seq.device), repr_layers=[33], return_contacts=False)
+        # index 0 is for start token. so take from 1 one
+        token_reps = results["representations"][33][:, 1 : len(str_seq) + 1].unsqueeze(dim=1)
+        
+    
     if embedd_type == "mean":
         token_reps = token_reps.mean(dim=0)
     return token_reps
