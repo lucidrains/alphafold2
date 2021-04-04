@@ -315,6 +315,12 @@ $ python setup.py test
 
 This library will use the awesome work by <a href="http://github.com/jonathanking">Jonathan King</a> at <a href="https://github.com/jonathanking/sidechainnet">this repository</a>. Thank you Jonathan 🙏!
 
+We also have the MSA data, all ~3.5 TB worth, downloaded and hosted by Archivist, who owns <a href="https://the-eye.eu/">The-Eye</a> project. (They also host the data and models for <a href="https://www.eleuther.ai/">Eleuther AI</a>) Please consider a donation if you find them helpful.
+
+```bash
+$ curl -s https://the-eye.eu/eleuther_staging/globus_stuffs/tree.txt
+```
+
 ## Speculation
 
 https://xukui.cn/alphafold2.html
