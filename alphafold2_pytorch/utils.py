@@ -224,13 +224,14 @@ def get_esm_embedd(seq, embedd_model, batch_converter, embedd_type="per_tok"):
         * batch_converter: ESM batch converter (see train_end2end.py for an example)
         * embedd_type: one of ["mean", "per_tok"]. 
                        "per_tok" is recommended if working with sequences.
+        Outputs: tensor of (L, 1280)
     """
     str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
     batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
     with torch.no_grad():
         results = embedd_model(batch_tokens, repr_layers=[33], return_contacts=False)
     # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][33][ 1 : len(str_seq) + 1].to(seq.device)
+    token_reps = results["representations"][33][ 0, 1 : len(str_seq) + 1].to(seq.device)
     if embedd_type == "mean":
         token_reps = token_reps.mean(dim=0)
     return token_reps
@@ -467,7 +468,8 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
         dispersion = torch.zeros_like(central, device=device)
     # rescale to 0-1. lower std / var  --> weight=1. set potential nan's to 0
     weights = mask / (1+dispersion)
-    weights[weights != weights] = 0.
+    weights[weights != weights] *= 0.
+    weights[:, diag_idxs, diag_idxs] *= 0.
     return central, weights
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
