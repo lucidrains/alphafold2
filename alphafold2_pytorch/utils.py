@@ -490,7 +490,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     # start
     batch, N, _ = pre_dist_mat.shape
     diag_idxs = np.arange(N)
-    his = [torch.tensor([np.inf])]
+    his = [torch.tensor([np.inf]*batch)]
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device).type(dtype)
     best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1
@@ -500,7 +500,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
         dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2).clone()
         stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
-        dist_mat[ dist_mat == 0 ] = 1e-7
+        dist_mat[ dist_mat <= 0 ] += 1e-7
         ratio = weights * (pre_dist_mat / dist_mat)
         B = -ratio
         B[:, diag_idxs, diag_idxs] += ratio.sum(dim=-1)
@@ -518,10 +518,9 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
             break
 
         best_3d_coords = coords
-        best_stress = (stress / dis)
-        his.append(best_stress)
+        his.append( stress / dis )
 
-    return torch.transpose(best_3d_coords, -1,-2), torch.cat(his)
+    return torch.transpose(best_3d_coords, -1,-2), torch.stack(his)
 
 def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
@@ -739,22 +738,31 @@ def kabsch_numpy(X, Y):
 
 # metrics - more formulas here: http://predictioncenter.org/casp12/doc/help.html
 
-def distmat_loss_torch(X, Y, p=2, q=2, distmat_mask=None):
+def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, distmat_mask=None):
     """ Calculates a loss on the distance matrix - no need to align structs.
         Inputs: 
-        * X: (N, d) tensor. the predicted stricture 
-        * Y: (N, d) tensor. the true structure
+        * X: (N, d) tensor. the predicted structure. One of (X, X_mat) is needed.
+        * X_mat: (N, N) tensor. the predicted distance matrix. Optional ()
+        * Y: (N, d) tensor. the true structure. One of (Y, Y_mat) is needed.
+        * Y_mat: (N, N) tensor. the predicted distance matrix. Optional ()
         * p: int. power for the distance calculation (2 for euclidean)
         * q: float. power for the scaling of the loss (2 for MSE, 1 for MAE, etc)
         * distmat_mask: (N, N) mask (boolean or weights for each ij pos). optional.
     """
+    assert (X is not None or X_mat is not None) and \
+           (Y is not None or Y_mat is not None), "The true and predicted coords or dist mats must be provided"
+    # calculate distance matrices
+    if X_mat is None: 
+        X_mat = torch.cdist(X, X, p=p)
+    if Y_mat is None: 
+        Y_mat = torch.cdist(Y, Y, p=p)
+    if distmat_mask is None:
+        distmat_mask = torch.ones_like(Y_mat).bool()
     # **2 ensures always positive. Later scale back to desired power
-    loss = ( torch.cdist(X, X, p=p) - torch.cdist(Y, Y, p=p) )**2 
+    loss = ( X_mat - Y_mat )**2 
     if q != 2:
         loss = loss**(q/2)
-    if distmat_mask is not None:
-        loss *= distmat_mask.float()
-    return loss.mean()
+    return loss[distmat_mask].mean()
 
 def rmsd_torch(X, Y):
     """ Assumes x,y are both (B x D x N). See below for wrapper. """

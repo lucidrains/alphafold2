@@ -303,6 +303,221 @@
   },
   {
    "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "### test mds differentiability"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 38,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):\n",
+    "    \"\"\" Gets distance matrix. Outputs 3d. See below for wrapper. \n",
+    "        Assumes (for now) distogram is (N x N) and symmetric\n",
+    "        Outs: \n",
+    "        * best_3d_coords: (batch x 3 x N)\n",
+    "        * historic_stresses: (batch x steps)\n",
+    "    \"\"\"\n",
+    "    device, dtype = pre_dist_mat.device, pre_dist_mat.type()\n",
+    "\n",
+    "    if weights is None:\n",
+    "        weights = torch.ones_like(pre_dist_mat)\n",
+    "\n",
+    "    # ensure batched MDS\n",
+    "    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))\n",
+    "    # print(pre_dist_mat)\n",
+    "\n",
+    "    # start\n",
+    "    batch, N, _ = pre_dist_mat.shape\n",
+    "    diag_idxs = np.arange(N)\n",
+    "    his = [torch.tensor([np.inf]*batch)]\n",
+    "    # init random coords\n",
+    "    best_stress = float(\"Inf\") * torch.ones(batch, device = device).type(dtype)\n",
+    "    best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1\n",
+    "    # iterative updates:\n",
+    "    for i in range(iters):\n",
+    "        # compute distance matrix of coords and stress\n",
+    "        dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2).clone()\n",
+    "        stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5\n",
+    "        # perturb - update X using the Guttman transform - sklearn-like\n",
+    "        dist_mat[ dist_mat <= 0 ] += 1e-7\n",
+    "        ratio = weights * (pre_dist_mat / dist_mat)\n",
+    "        B = -ratio\n",
+    "        B[:, diag_idxs, diag_idxs] += ratio.sum(dim=-1)\n",
+    "        \n",
+    "        # print(\"b\", B)\n",
+    "\n",
+    "        # update\n",
+    "        coords = (1. / N * torch.matmul(B, best_3d_coords))\n",
+    "        \n",
+    "        # print(\"coords, \", coords)\n",
+    "        dis = torch.norm(coords, dim=(-1, -2))\n",
+    "        if verbose >= 2:\n",
+    "            print('it: %d, stress %s' % (i, stress))\n",
+    "        # update metrics if relative improvement above tolerance\n",
+    "        if (best_stress - stress / dis).mean() <= tol:\n",
+    "            if verbose:\n",
+    "                print('breaking at iteration %d with stress %s' % (i,\n",
+    "                                                                   stress / dis))\n",
+    "            break\n",
+    "\n",
+    "        best_3d_coords = coords\n",
+    "        his.append( stress / dis )\n",
+    "\n",
+    "    return torch.transpose(best_3d_coords, -1,-2), torch.stack(his)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 39,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "dafuq = dist_mat.clone()\n",
+    "dafuq.requires_grad = True"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 45,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "it: 0, stress tensor([1.1115e+08], grad_fn=<MulBackward0>)\n",
+      "it: 1, stress tensor([55919684.], grad_fn=<MulBackward0>)\n",
+      "it: 2, stress tensor([51011816.], grad_fn=<MulBackward0>)\n",
+      "it: 3, stress tensor([48569428.], grad_fn=<MulBackward0>)\n",
+      "it: 4, stress tensor([47367632.], grad_fn=<MulBackward0>)\n"
+     ]
+    }
+   ],
+   "source": [
+    "preds, stresses = mds_torch(dafuq.cpu(), weights=None, iters=5, tol=1e-5, verbose=2)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 46,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "tensor([[[-1.9216,  0.3686, -1.3033,  ...,  1.4055,  2.6621,  0.9329],\n",
+       "         [ 2.2042, -0.1533, -0.8477,  ..., -0.2953,  1.5574,  1.2087],\n",
+       "         [-1.8189, -3.2734, -2.7553,  ...,  2.7048,  0.7715,  2.5815]]],\n",
+       "       grad_fn=<TransposeBackward0>)"
+      ]
+     },
+     "execution_count": 46,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "preds"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 47,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "preds.mean().backward()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 48,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "tensor([[ 0.0000e+00, -2.1965e-09,  1.0674e-08,  ..., -1.3870e-08,\n",
+       "         -5.0014e-09, -6.9814e-09],\n",
+       "        [ 2.1965e-09,  0.0000e+00,  1.5031e-08,  ..., -8.6913e-09,\n",
+       "         -2.8993e-10, -1.2469e-09],\n",
+       "        [-1.0674e-08, -1.5031e-08,  0.0000e+00,  ..., -1.8171e-08,\n",
+       "         -1.3620e-08, -1.3285e-08],\n",
+       "        ...,\n",
+       "        [ 1.3870e-08,  8.6913e-09,  1.8171e-08,  ...,  0.0000e+00,\n",
+       "          6.8784e-09,  3.4835e-09],\n",
+       "        [ 5.0014e-09,  2.8994e-10,  1.3620e-08,  ..., -6.8784e-09,\n",
+       "          0.0000e+00, -3.7405e-09],\n",
+       "        [ 6.9814e-09,  1.2469e-09,  1.3285e-08,  ..., -3.4835e-09,\n",
+       "          3.7405e-09,  0.0000e+00]])"
+      ]
+     },
+     "execution_count": 48,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "dafuq.grad"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
    "execution_count": 16,
    "metadata": {
     "scrolled": false
