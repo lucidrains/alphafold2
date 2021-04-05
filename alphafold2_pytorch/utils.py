@@ -240,7 +240,7 @@ def read_msa(filename: str, nseq: int):
 def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_type="per_tok"):
     """ Returns the ESM embeddings for a protein. 
         Inputs: 
-        * seq: (L,) tensor of ints (in sidechainnet int-char convention)
+        * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
         * embedd_model: ESM model (see train_end2end.py for an example)
         * batch_converter: ESM batch converter (see train_end2end.py for an example)
         * embedd_type: one of ["mean", "per_tok"]. 
@@ -250,26 +250,27 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_typ
             * embedd_dim: number of embedding dimensions. 
                           768 for MSA_Transformer and 1280 for ESM-1b
     """
-    str_seq = "".join([VOCAB._int2char[x]for x in seq.cpu().numpy()])
+    seq = expand_dims_to(seq, 2 - len(seq.shape))
+    str_seq = ["".join([VOCAB._int2char[x] for x in s]) for s in seq.cpu().numpy()]
     # use MSA transformer
     if msa_data is not None: 
         msa_batch_labels, msa_batch_strs, msa_batch_tokens = batch_converter(msa_data)
         with torch.no_grad():
             results = embedd_model(msa_batch_tokens.to(seq.device), repr_layers=[12], return_contacts=False)
         # index 0 is for start token. so take from 1 one
-        token_reps = results["representations"][12][0, :,  1 : len(str_seq) + 1]
+        token_reps = results["representations"][12][0, :,  1 : len(str_seq[0]) + 1]
         
     # base ESM case
     else: 
-        batch_labels, batch_strs, batch_tokens = batch_converter( [(0, str_seq)] )
+        batch_labels, batch_strs, batch_tokens = batch_converter( [(i, str_seq[i]) for i in range(str_seq[0])] )
         with torch.no_grad():
             results = embedd_model(batch_tokens.to(seq.device), repr_layers=[33], return_contacts=False)
         # index 0 is for start token. so take from 1 one
-        token_reps = results["representations"][33][:, 1 : len(str_seq) + 1].unsqueeze(dim=1)
+        token_reps = results["representations"][33][:, 1 : len(str_seq[0]) + 1].unsqueeze(dim=1)
         
     
     if embedd_type == "mean":
-        token_reps = token_reps.mean(dim=0)
+        token_reps = token_reps.mean(dim=1)
     return token_reps
 
 
