@@ -17,7 +17,7 @@ from alphafold2_pytorch.reversible import ReversibleSequence
 # structure module
 
 from se3_transformer_pytorch import SE3Transformer
-from se3_transformer_pytorch.utils import torch_default_dtype
+from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
 
 # constants
@@ -494,8 +494,8 @@ class SE3TransformerWrapper(nn.Module):
         self.net = SE3Transformer(*args, **kwargs)
         self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
 
-    def forward(self, x, coords, mask = None, adj_mat = None):
-        output = self.net(x, coords, mask = mask, adj_mat = adj_mat)
+    def forward(self, x, coords, mask = None, adj_mat = None, edges = None):
+        output = self.net(x, coords, mask = mask, adj_mat = adj_mat, edges = edges)
         x, refined_coords = output['0'], output['1']
 
         refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
@@ -570,15 +570,17 @@ class Alphafold2(nn.Module):
         predict_angles = False,
         predict_coords = False,                # structure module related keyword arguments below
         predict_real_value_distances = False,
+        trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
+        se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
         return_aux_logits = False,
         mds_iters = 5,
         use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
-        structure_module_dim_head = 16,
+        structure_module_dim_head = 4,
         structure_module_refinement_iters = 2,
-        structure_module_knn = 8,
+        structure_module_knn = 0,
         structure_module_adj_neighbors = 2
     ):
         super().__init__()
@@ -723,6 +725,12 @@ class Alphafold2(nn.Module):
 
         self.trunk_to_structure_dim = nn.Linear(dim, structure_module_dim)
 
+        self.trunk_embeds_to_se3_edges = trunk_embeds_to_se3_edges
+        self.se3_edges_fourier_encodings = se3_edges_fourier_encodings
+        edge_dim = ((2 * se3_edges_fourier_encodings) + 1) * trunk_embeds_to_se3_edges
+
+        self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
+
         with torch_default_dtype(torch.float64):
             self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
             self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
@@ -738,6 +746,7 @@ class Alphafold2(nn.Module):
                     differentiable_coors = True,
                     num_neighbors = 0, # use only bonded neighbors for now
                     attend_sparse_neighbors = True,
+                    edge_dim = edge_dim,
                     num_adj_degrees = structure_module_adj_neighbors,
                     adj_dim = 4,
                 )
@@ -749,6 +758,7 @@ class Alphafold2(nn.Module):
                     fourier_features = 2,
                     num_nearest_neighbors = 0,
                     only_sparse_neighbors = True,
+                    edge_dim = edge_dim,
                     num_adj_degrees = structure_module_adj_neighbors,
                     adj_dim = 4
                 )
@@ -967,12 +977,25 @@ class Alphafold2(nn.Module):
         coords = rearrange(coords, 'b n l d -> b (n l) d')
         atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
-        trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
-        x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
+        num_atoms = cloud_mask.shape[-1]
+
+        structure_embed = self.trunk_to_structure_dim(trunk_embeds)
+        x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = cloud_mask.shape[-1])
+        x = repeat(x, 'b n d -> b n l d', l = num_atoms)
         x += self.atom_tokens_embed(atom_tokens)
         x = rearrange(x, 'b n l d -> b (n l) d')
+
+        # derive edges from trunk -> equivariant network, if needed
+
+        edges = None
+        if exists(self.to_equivariant_net_edges):
+            edges = self.to_equivariant_net_edges(trunk_embeds)
+            edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
+            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms, m = num_atoms)
+            edges = edges.double()
+
+        # prepare float64 precision for equivariance
 
         original_dtype = coords.dtype
         x, coords = map(lambda t: t.double(), (x, coords))
@@ -987,7 +1010,13 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                x, coords = self.structure_module(x, coords, mask = flat_chain_mask, adj_mat = adj_mat)
+                x, coords = self.structure_module(
+                    x,
+                    coords,
+                    mask = flat_chain_mask,
+                    adj_mat = adj_mat,
+                    edges = edges
+                )
 
         coords.type(original_dtype)
 
