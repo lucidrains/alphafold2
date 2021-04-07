@@ -568,6 +568,7 @@ class Alphafold2(nn.Module):
         template_attn_depth = 2,
         num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
+        symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
         predict_real_value_distances = False,
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
@@ -607,6 +608,8 @@ class Alphafold2(nn.Module):
         # projection for angles, if needed
 
         self.predict_angles = predict_angles
+        self.symmetrize_omega = symmetrize_omega
+
         if predict_angles:
             self.to_prob_theta = nn.Linear(dim, constants.THETA_BUCKETS)
             self.to_prob_phi   = nn.Linear(dim, constants.PHI_BUCKETS)
@@ -932,7 +935,8 @@ class Alphafold2(nn.Module):
         ret = distance_pred
 
         if self.predict_angles:
-            omega_logits = self.to_prob_omega(x)
+            omega_input = trunk_embeds if self.symmetrize_omega else x
+            omega_logits = self.to_prob_omega(omega_input)
             ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
 
         if not self.predict_coords or return_trunk:
