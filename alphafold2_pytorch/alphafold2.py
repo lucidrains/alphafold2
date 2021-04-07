@@ -906,6 +906,12 @@ class Alphafold2(nn.Module):
         x = x.view(seq_shape)
         x = x[:, 0]
 
+        # calculate theta and phi before symmetrization
+
+        if self.predict_angles:
+            theta_logits = self.to_prob_theta(x)
+            phi_logits = self.to_prob_phi(x)
+
         # embeds to distogram
 
         trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
@@ -916,10 +922,7 @@ class Alphafold2(nn.Module):
         ret = distance_pred
 
         if self.predict_angles:
-            theta_logits = self.to_prob_theta(x)
-            phi_logits = self.to_prob_phi(x)
             omega_logits = self.to_prob_omega(x)
-
             ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
 
         if not self.predict_coords or return_trunk:
