@@ -262,6 +262,11 @@ class Attention(nn.Module):
 
         self.rotary_sinu_emb = FixedPositionalEmbedding(dim_head) if rotary_rpe else None
 
+    def apply_rpe(self, q, k):
+        sinu_emb = self.rotary_sinu_emb(q)
+        q, k = apply_rotary_pos_emb(q, k, sinu_emb)
+        return q, k
+
     def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
@@ -300,8 +305,7 @@ class Attention(nn.Module):
         # rotary relative positional encoding
 
         if exists(self.rotary_sinu_emb) and not has_context:
-            sinu_emb = self.rotary_sinu_emb(q)
-            q, k = apply_rotary_pos_emb(q, k, sinu_emb)
+            q, k = self.apply_rpe(q, k)
 
         # for tying row-attention, for MSA axial self-attention
 
@@ -389,6 +393,9 @@ class SparseAttention(Attention):
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
+        if exists(self.rotary_sinu_emb):
+            q, k = self.apply_rpe(q, k)
 
         key_pad_mask = None
         if exists(mask):
