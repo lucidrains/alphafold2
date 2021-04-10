@@ -37,6 +37,33 @@ def default(val, d):
 def cast_tuple(val, depth):
     return val if isinstance(val, tuple) else (val,) * depth
 
+# positional embeddings
+
+class FixedPositionalEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+    def forward(self, x):
+        t = torch.arange(x.shape[-2], device = x.device).type_as(self.inv_freq)
+        sinusoid_inp = einsum('i , j -> i j', t, self.inv_freq)
+        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+        return rearrange(emb, 'i j -> () i j')
+
+def rotate_every_two(x):
+    x = rearrange(x, '... (d j) -> ... d j', j = 2)
+    x1, x2 = x.unbind(dim = -1)
+    x = torch.stack((-x2, x1), dim = -1)
+    return rearrange(x, '... d j -> ... (d j)')
+
+def apply_rotary_pos_emb(q, k, sinu_pos):
+    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
+    sin, cos = sinu_pos.unbind(dim = -2)
+    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
+    q, k = map(lambda t: (t * cos) + (rotate_every_two(t) * sin), (q, k))
+    return q, k
+
 # helper classes
 
 class PreNorm(nn.Module):
@@ -213,7 +240,8 @@ class Attention(nn.Module):
         dim_head = 64,
         dropout = 0.,
         compress_ratio = 1,
-        tie_attn_dim = None
+        tie_attn_dim = None,
+        rotary_rpe = False
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -231,6 +259,8 @@ class Attention(nn.Module):
         self.compress_fn = nn.Conv1d(inner_dim, inner_dim, compress_ratio, stride = compress_ratio, groups = heads) if compress_ratio > 1 else None
 
         self.tie_attn_dim = tie_attn_dim
+
+        self.rotary_sinu_emb = FixedPositionalEmbedding(dim_head) if rotary_rpe else None
 
     def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
@@ -266,6 +296,12 @@ class Attention(nn.Module):
                 j = (j + padding) // ratio
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
+        # rotary relative positional encoding
+
+        if exists(self.rotary_sinu_emb) and not has_context:
+            sinu_emb = self.rotary_sinu_emb(q)
+            q, k = apply_rotary_pos_emb(q, k, sinu_emb)
 
         # for tying row-attention, for MSA axial self-attention
 
@@ -564,6 +600,7 @@ class Alphafold2(nn.Module):
         reversible = False,
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
+        rotary_rpe = True,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
         num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
@@ -678,9 +715,9 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = rotary_rpe))),
                 prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
