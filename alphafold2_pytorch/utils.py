@@ -238,13 +238,13 @@ def read_msa(filename: str, nseq: int):
 # sidechainnet / MSA / other data utils
 
 def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_type="per_tok"):
-    """ Returns the ESM embeddings for a protein. 
+    """ Returns the ESM or MSA_tr embeddings for a protein. 
         Inputs: 
         * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
-        * embedd_model: ESM model (see train_end2end.py for an example)
-        * batch_converter: ESM batch converter (see train_end2end.py for an example)
+        * embedd_model: ESM/MSA_tr model (see train_end2end.py for an example)
+        * batch_converter: ESM/MSA_tr batch converter (see train_end2end.py for an example)
         * embedd_type: one of ["mean", "per_tok"]. 
-                       "per_tok" is recommended if working with sequences.
+                       "per_tok" is recommended if working with sequences later.
         Outputs: tensor of (batch, n_seqs, L, embedd_dim)
             * n_seqs: number of sequences in the MSA. 1 for ESM-1b
             * embedd_dim: number of embedding dimensions. 
@@ -511,7 +511,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
-def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
+def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distogram is (N x N) and symmetric
         Outs: 
@@ -520,16 +520,32 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
     """
     device, dtype = pre_dist_mat.device, pre_dist_mat.type()
 
+    # start
+    batch, N, _ = pre_dist_mat.shape
+    diag_idxs = np.arange(N)
+    his = [torch.tensor([np.inf]*batch, device=device)]
+
+    # do it by eigendecomposition - way faster but not weights
+    # https://www.biorxiv.org/content/10.1101/2020.11.27.401232v1.full.pdf
+    if eigen == True and weights is None:
+        preds_3d = []
+        for bi in range(pre_dist_mat.shape[0]):
+            D = pre_dist_mat[bi]**2
+            M = M[:1, :] + M[:, :1] - M 
+            u,s,v = torch.svd_lowrank(M/2)
+            preds_3d.append( (u@torch.diag(s).sqrt())[:, :3].t() )
+        return torch.stack(preds_3d, dim=0), torch.zeros_like(torch.stack(his, dim=0))
+    elif eigen == True:
+        if verbose: 
+            print("Can't use eigen flag if weights are active. Fallback to iterative")
+
+    # continue the iterative way
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
 
     # ensure batched MDS
     pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
 
-    # start
-    batch, N, _ = pre_dist_mat.shape
-    diag_idxs = np.arange(N)
-    his = [torch.tensor([np.inf]*batch)]
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device).type(dtype)
     best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1
@@ -556,12 +572,13 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
                                                                    stress / dis))
             break
 
+        pre_dist_mat = dist_mat
         best_3d_coords = coords
         his.append( stress / dis )
 
-    return torch.transpose(best_3d_coords, -1,-2), torch.stack(his)
+    return torch.transpose(best_3d_coords, -1,-2), torch.stack(his, dim=0)
 
-def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, verbose=2):
+def mds_numpy(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbose=2):
     """ Gets distance matrix. Outputs 3d. See below for wrapper. 
         Assumes (for now) distrogram is (N x N) and symmetric
         Out:
