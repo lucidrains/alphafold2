@@ -156,6 +156,33 @@ def test_coords_se3():
 
     assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
 
+def test_edges_to_equivariant_network():
+    model = Alphafold2(
+        dim = 256,
+        depth = 1,
+        heads = 8,
+        dim_head = 64,
+        use_se3_transformer = False,
+        predict_coords = True,
+        predict_angles = True,
+        num_backbone_atoms = 3
+    )
+
+    seq = torch.randint(0, 21, (2, 16))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 32))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords, confidences = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        return_confidence = True
+    )
+    assert True, 'should run without errors'
+
 def test_real_value_distance_with_coords():
     model = Alphafold2(
         dim = 256,

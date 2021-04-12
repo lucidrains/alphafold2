@@ -17,7 +17,7 @@ from alphafold2_pytorch.reversible import ReversibleSequence
 # structure module
 
 from se3_transformer_pytorch import SE3Transformer
-from se3_transformer_pytorch.utils import torch_default_dtype
+from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
 
 # constants
@@ -36,6 +36,33 @@ def default(val, d):
 
 def cast_tuple(val, depth):
     return val if isinstance(val, tuple) else (val,) * depth
+
+# positional embeddings
+
+class FixedPositionalEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+    def forward(self, x):
+        t = torch.arange(x.shape[-2], device = x.device).type_as(self.inv_freq)
+        sinusoid_inp = einsum('i , j -> i j', t, self.inv_freq)
+        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+        return rearrange(emb, 'i j -> () i j')
+
+def rotate_every_two(x):
+    x = rearrange(x, '... (d j) -> ... d j', j = 2)
+    x1, x2 = x.unbind(dim = -1)
+    x = torch.stack((-x2, x1), dim = -1)
+    return rearrange(x, '... d j -> ... (d j)')
+
+def apply_rotary_pos_emb(q, k, sinu_pos):
+    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
+    sin, cos = sinu_pos.unbind(dim = -2)
+    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
+    q, k = map(lambda t: (t * cos) + (rotate_every_two(t) * sin), (q, k))
+    return q, k
 
 # helper classes
 
@@ -213,7 +240,8 @@ class Attention(nn.Module):
         dim_head = 64,
         dropout = 0.,
         compress_ratio = 1,
-        tie_attn_dim = None
+        tie_attn_dim = None,
+        rotary_rpe = False
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -231,6 +259,13 @@ class Attention(nn.Module):
         self.compress_fn = nn.Conv1d(inner_dim, inner_dim, compress_ratio, stride = compress_ratio, groups = heads) if compress_ratio > 1 else None
 
         self.tie_attn_dim = tie_attn_dim
+
+        self.rotary_sinu_emb = FixedPositionalEmbedding(dim_head) if rotary_rpe else None
+
+    def apply_rpe(self, q, k):
+        sinu_emb = self.rotary_sinu_emb(q)
+        q, k = apply_rotary_pos_emb(q, k, sinu_emb)
+        return q, k
 
     def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
@@ -266,6 +301,11 @@ class Attention(nn.Module):
                 j = (j + padding) // ratio
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
+        # rotary relative positional encoding
+
+        if exists(self.rotary_sinu_emb) and not has_context:
+            q, k = self.apply_rpe(q, k)
 
         # for tying row-attention, for MSA axial self-attention
 
@@ -354,6 +394,9 @@ class SparseAttention(Attention):
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
+        if exists(self.rotary_sinu_emb):
+            q, k = self.apply_rpe(q, k)
+
         key_pad_mask = None
         if exists(mask):
             key_pad_mask = repeat(~mask, 'b n -> b h n', h = h)
@@ -371,9 +414,13 @@ class AxialAttention(nn.Module):
         template_axial_attn = False,
         tie_row_attn = False,
         sparse_attn = False,
+        row_attn = True,
+        col_attn = True,
         **kwargs
     ):
         super().__init__()
+        assert not (not row_attn and not col_attn), 'row or column attention must be turned on'
+
         attn_class = SparseAttention if sparse_attn else Attention
 
         self.tie_row_attn = tie_row_attn # tie the row attention, from the paper 'MSA Transformer'
@@ -384,6 +431,9 @@ class AxialAttention(nn.Module):
         self.template_axial_attn = template_axial_attn
         if template_axial_attn:
             self.attn_frames = Attention(**kwargs)
+
+        self.row_attn = row_attn
+        self.col_attn = col_attn
 
     def forward(self, x, shape, mask = None):
         b, n, d = x.shape
@@ -410,16 +460,25 @@ class AxialAttention(nn.Module):
             if num_axials == 3:
                 f_mask = rearrange(mask, 'b t h w -> (b h w) t')
 
-        w_x = rearrange(x, 'b t h w d -> (b t w) h d')
-        w_out = self.attn_width(w_x, mask = w_mask)
-        w_out = rearrange(w_out, '(b t w) h d -> b t h w d', h = h, w = w, t = t)
+        out = 0
+        axial_attn_count = 0
 
-        tie_attn_dim = x.shape[2] if self.tie_row_attn else None
-        h_x = rearrange(x, 'b t h w d -> (b t h) w d')
-        h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim)
-        h_out = rearrange(h_out, '(b t h) w d -> b t h w d', h = h, w = w, t = t)
+        if self.row_attn:
+            w_x = rearrange(x, 'b t h w d -> (b t w) h d')
+            w_out = self.attn_width(w_x, mask = w_mask)
+            w_out = rearrange(w_out, '(b t w) h d -> b t h w d', h = h, w = w, t = t)
 
-        out = w_out + h_out
+            out += w_out
+            axial_attn_count += 1
+
+        if self.col_attn:
+            tie_attn_dim = x.shape[2] if self.tie_row_attn else None
+            h_x = rearrange(x, 'b t h w d -> (b t h) w d')
+            h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim)
+            h_out = rearrange(h_out, '(b t h) w d -> b t h w d', h = h, w = w, t = t)
+
+            out += h_out
+            axial_attn_count += 1
 
         # do attention across the templates dimension, if (1) templates are present and (2) template axial attention was activated for the module
 
@@ -430,9 +489,9 @@ class AxialAttention(nn.Module):
             f_out = rearrange(f_out, '(b h w) t d -> b t h w d', h = h, w = w, t = t)
 
             out += f_out
+            axial_attn_count += 1
 
-        denom = 3 if needs_template_axial_attn else 2
-        out /= denom
+        out /= axial_attn_count
 
         return rearrange(out, 'b t h w d -> b (t h w) d')
 
@@ -478,8 +537,8 @@ class SE3TransformerWrapper(nn.Module):
         self.net = SE3Transformer(*args, **kwargs)
         self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
 
-    def forward(self, x, coords, mask = None, adj_mat = None):
-        output = self.net(x, coords, mask = mask, adj_mat = adj_mat)
+    def forward(self, x, coords, mask = None, adj_mat = None, edges = None):
+        output = self.net(x, coords, mask = mask, adj_mat = adj_mat, edges = edges)
         x, refined_coords = output['0'], output['1']
 
         refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
@@ -548,21 +607,25 @@ class Alphafold2(nn.Module):
         reversible = False,
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
+        rotary_rpe = True,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
         num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
+        symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
         predict_real_value_distances = False,
+        trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
+        se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
         return_aux_logits = False,
         mds_iters = 5,
         use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
-        structure_module_dim_head = 16,
+        structure_module_dim_head = 4,
         structure_module_refinement_iters = 2,
-        structure_module_knn = 8,
+        structure_module_knn = 0,
         structure_module_adj_neighbors = 2
     ):
         super().__init__()
@@ -589,6 +652,8 @@ class Alphafold2(nn.Module):
         # projection for angles, if needed
 
         self.predict_angles = predict_angles
+        self.symmetrize_omega = symmetrize_omega
+
         if predict_angles:
             self.to_prob_theta = nn.Linear(dim, constants.THETA_BUCKETS)
             self.to_prob_phi   = nn.Linear(dim, constants.PHI_BUCKETS)
@@ -635,7 +700,12 @@ class Alphafold2(nn.Module):
         layers = nn.ModuleList([])
         attn_types = islice(cycle(attn_types), depth)
 
-        for _, layer_sparse_attn, attn_type in zip(range(depth), layers_sparse_attn, attn_types):
+        for ind, layer_sparse_attn, attn_type in zip(range(depth), layers_sparse_attn, attn_types):
+
+            # alternate between row and column attention to save memory each layer
+
+            row_attn = ind % 2 == 0
+            col_attn = ind % 2 == 1
 
             # self attention, for main sequence, msa, and optionally, templates
 
@@ -652,9 +722,9 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = rotary_rpe))),
                 prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn)),
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -702,6 +772,12 @@ class Alphafold2(nn.Module):
 
         self.trunk_to_structure_dim = nn.Linear(dim, structure_module_dim)
 
+        self.trunk_embeds_to_se3_edges = trunk_embeds_to_se3_edges
+        self.se3_edges_fourier_encodings = se3_edges_fourier_encodings
+        edge_dim = ((2 * se3_edges_fourier_encodings) + 1) * trunk_embeds_to_se3_edges
+
+        self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
+
         with torch_default_dtype(torch.float64):
             self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
             self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
@@ -717,6 +793,7 @@ class Alphafold2(nn.Module):
                     differentiable_coors = True,
                     num_neighbors = 0, # use only bonded neighbors for now
                     attend_sparse_neighbors = True,
+                    edge_dim = edge_dim,
                     num_adj_degrees = structure_module_adj_neighbors,
                     adj_dim = 4,
                 )
@@ -728,6 +805,7 @@ class Alphafold2(nn.Module):
                     fourier_features = 2,
                     num_nearest_neighbors = 0,
                     only_sparse_neighbors = True,
+                    edge_dim = edge_dim,
                     num_adj_degrees = structure_module_adj_neighbors,
                     adj_dim = 4
                 )
@@ -885,6 +963,12 @@ class Alphafold2(nn.Module):
         x = x.view(seq_shape)
         x = x[:, 0]
 
+        # calculate theta and phi before symmetrization
+
+        if self.predict_angles:
+            theta_logits = self.to_prob_theta(x)
+            phi_logits = self.to_prob_phi(x)
+
         # embeds to distogram
 
         trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
@@ -895,10 +979,8 @@ class Alphafold2(nn.Module):
         ret = distance_pred
 
         if self.predict_angles:
-            theta_logits = self.to_prob_theta(x)
-            phi_logits = self.to_prob_phi(x)
-            omega_logits = self.to_prob_omega(x)
-
+            omega_input = trunk_embeds if self.symmetrize_omega else x
+            omega_logits = self.to_prob_omega(omega_input)
             ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
 
         if not self.predict_coords or return_trunk:
@@ -943,12 +1025,25 @@ class Alphafold2(nn.Module):
         coords = rearrange(coords, 'b n l d -> b (n l) d')
         atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
-        trunk_embeds = self.trunk_to_structure_dim(trunk_embeds)
-        x = reduce(trunk_embeds, 'b i j d -> b i d', 'mean')
+        num_atoms = cloud_mask.shape[-1]
+
+        structure_embed = self.trunk_to_structure_dim(trunk_embeds)
+        x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = cloud_mask.shape[-1])
+        x = repeat(x, 'b n d -> b n l d', l = num_atoms)
         x += self.atom_tokens_embed(atom_tokens)
         x = rearrange(x, 'b n l d -> b (n l) d')
+
+        # derive edges from trunk -> equivariant network, if needed
+
+        edges = None
+        if exists(self.to_equivariant_net_edges):
+            edges = self.to_equivariant_net_edges(trunk_embeds)
+            edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
+            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms, m = num_atoms)
+            edges = edges.double()
+
+        # prepare float64 precision for equivariance
 
         original_dtype = coords.dtype
         x, coords = map(lambda t: t.double(), (x, coords))
@@ -963,7 +1058,13 @@ class Alphafold2(nn.Module):
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
-                x, coords = self.structure_module(x, coords, mask = flat_chain_mask, adj_mat = adj_mat)
+                x, coords = self.structure_module(
+                    x,
+                    coords,
+                    mask = flat_chain_mask,
+                    adj_mat = adj_mat,
+                    edges = edges
+                )
 
         coords.type(original_dtype)
 
