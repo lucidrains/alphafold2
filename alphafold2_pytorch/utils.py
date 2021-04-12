@@ -483,13 +483,14 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     n_bins[-1] = 1.33*bins[-1] # above last threshold is ignored
     max_bin_allowed = torch.tensor(n_bins.shape[0]-1).to(device).long()
     # calculate measures of centrality and dispersion - 
+    magnitudes = distogram.sum(dim=-1)
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
-        medium   = 0.5 * torch.ones(*cum_dist.shape[:-1], 1, device=device)
+        medium   = 0.5 * cum_dist[..., -1]
         central  = torch.searchsorted(cum_dist, medium).squeeze()
         central  = n_bins[ torch.min(central, max_bin_allowed) ]
     elif center == "mean":
-        central  = (distogram * n_bins).sum(dim=-1)
+        central  = (distogram * n_bins).sum(dim=-1) / magnitudes
     # create mask for last class - (IGNORE_INDEX)   
     mask = (central <= bins[-2].item()).float()
     # mask diagonal to 0 dist - don't do masked filling to avoid inplace errors
@@ -498,9 +499,9 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     central[:, diag_idxs, diag_idxs]  *= 0.
     # provide weights
     if wide == "var":
-        dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1)
+        dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1) / magnitudes
     elif wide == "std":
-        dispersion = (distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1).sqrt()
+        dispersion = ((distogram * (n_bins - central.unsqueeze(-1))**2).sum(dim=-1) / magnitudes).sqrt()
     else:
         dispersion = torch.zeros_like(central, device=device)
     # rescale to 0-1. lower std / var  --> weight=1. set potential nan's to 0
