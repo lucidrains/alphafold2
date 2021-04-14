@@ -532,7 +532,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         preds_3d = []
         for bi in range(pre_dist_mat.shape[0]):
             D = pre_dist_mat[bi]**2
-            M = M[:1, :] + M[:, :1] - M 
+            M = D[:1, :] + D[:, :1] - D 
             u,s,v = torch.svd_lowrank(M/2)
             preds_3d.append( (u@torch.diag(s).sqrt())[:, :3].t() )
         return torch.stack(preds_3d, dim=0), torch.zeros_like(torch.stack(his, dim=0))
@@ -886,11 +886,12 @@ def tmscore_numpy(X, Y):
 
 
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
-                    fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, verbose=2):
+                    fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, 
+                    eigen=True, verbose=2):
     """ Handles the specifics of MDS for proteins (mirrors, ...) """
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
-                                              tol=tol, verbose=verbose)
+                                              tol=tol, eigen=True, verbose=verbose)
     if not fix_mirror:
         return preds, stresses
 
