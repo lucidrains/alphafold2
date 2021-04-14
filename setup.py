@@ -21,7 +21,6 @@ setup(
     'mdtraj>=1.8',
     'numpy',
     'proDy',
-    'pytorch-lightning',
     'requests',
     'se3-transformer-pytorch>=0.2.5',
     'sidechainnet',

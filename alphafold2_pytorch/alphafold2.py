@@ -634,20 +634,11 @@ class Alphafold2(nn.Module):
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
 
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.pos_emb_ax = nn.Embedding(max_seq_len, dim)
-
-        # multiple sequence alignment position embedding
-
-        self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(max_num_msas, dim)
 
         # template embedding
 
         self.template_dist_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
         self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
-        self.template_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
         # projection for angles, if needed
 
@@ -845,19 +836,12 @@ class Alphafold2(nn.Module):
         x = rearrange(x, 'b i d -> b () i () d') + rearrange(x, 'b j d-> b () () j d') # create pair-wise residue embeds
         x_mask = rearrange(mask, 'b i -> b () i ()') + rearrange(mask, 'b j -> b () () j') if exists(mask) else None
 
-        # axial positional embedding
-
-        pos_emb = rearrange(self.pos_emb(n_range), 'i d -> () i () d') + rearrange(self.pos_emb_ax(n_range), 'j d -> () () j d')
-        x += pos_emb
-
         # embed multiple sequence alignment (msa)
 
         m = None
         msa_shape = None
         if exists(msa):
             m = self.token_emb(msa)
-            m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
-            m += self.msa_num_pos_emb(torch.arange(msa.shape[1], device = device))[None, :, None, :]
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
@@ -867,7 +851,6 @@ class Alphafold2(nn.Module):
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-            m += self.msa_pos_emb(torch.arange(embedds.shape[-2], device = device))[None, None, ...]
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
@@ -929,9 +912,6 @@ class Alphafold2(nn.Module):
 
             template_num_pos_emb = self.template_num_pos_emb(torch.arange(num_templates, device = device))
             t += rearrange(template_num_pos_emb, 't d-> () t () () d')
-
-            pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () () j d')
-            t += pos_emb
 
             assert t.shape[-2:] == x.shape[-2:]
 
