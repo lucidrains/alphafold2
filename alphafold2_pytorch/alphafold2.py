@@ -39,6 +39,17 @@ def cast_tuple(val, depth):
 
 # positional embeddings
 
+class DepthWiseConv1d(nn.Module):
+    def __init__(self, dim_in, dim_out, kernel_size, padding = 0, stride = 1, bias = True, groups = None):
+        super().__init__()
+        groups = default(groups, dim_in)
+        self.net = nn.Sequential(
+            nn.Conv1d(dim_in, dim_in, kernel_size = kernel_size, padding = padding, groups = groups, stride = stride, bias = bias),
+            nn.Conv1d(dim_in, dim_out, 1, bias = bias)
+        )
+    def forward(self, x):
+        return self.net(x)
+
 class FixedPositionalEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -241,14 +252,24 @@ class Attention(nn.Module):
         dropout = 0.,
         compress_ratio = 1,
         tie_attn_dim = None,
-        rotary_rpe = False
+        rotary_rpe = False,
+        rotary_conv_q_kernel = 15
     ):
         super().__init__()
         inner_dim = dim_head * heads
         self.seq_len = seq_len
         self.heads= heads
         self.scale = dim_head ** -0.5
-        self.to_q = nn.Linear(dim, inner_dim, bias = False)
+
+        if rotary_rpe:
+            self.to_q = nn.Sequential(
+                Rearrange('b n d -> b d n'),
+                DepthWiseConv1d(dim, inner_dim, rotary_conv_q_kernel, padding = (rotary_conv_q_kernel // 2)),
+                Rearrange('b d n -> b n d')
+            )
+        else:
+            self.to_q = nn.Linear(dim, inner_dim, bias = False)
+
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim)
 
@@ -312,12 +333,21 @@ class Attention(nn.Module):
         if exists(tie_attn_dim):
             q, k, v = map(lambda t: rearrange(t, '(b r) h n d -> b r h n d', r = tie_attn_dim), (q, k, v))
 
-            # when tying row-attention, one cannot have any masked out tokens
             if exists(mask):
-                assert torch.all(mask), 'you cannot have any padding if you are to tie the row attention across MSAs'
-                mask = None
+                mask = rearrange(mask, '(b r) n -> b r n', r = tie_attn_dim)
+                has_rows = mask.any(dim = -1)
 
-            dots = einsum('b r h i d, b r h j d -> b h i j', q, k) * self.scale * (tie_attn_dim ** -0.5)
+                num_rows = has_rows.sum(dim = -1)
+                num_rows = rearrange(num_rows, 'b -> b () () ()').to(q)
+                mask = mask.any(dim = 1)
+
+                # mask out the rows that have nothing as 0
+                row_mask = ~rearrange(has_rows, 'b r -> b r () () ()')
+                q.masked_fill_(row_mask, 0.)
+            else:
+                num_rows = tie_attn_dim
+
+            dots = einsum('b r h i d, b r h j d -> b h i j', q, k) * self.scale * (num_rows ** -0.5)
         else:
             dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
@@ -607,7 +637,6 @@ class Alphafold2(nn.Module):
         reversible = False,
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
-        rotary_rpe = True,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
         num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
@@ -634,20 +663,11 @@ class Alphafold2(nn.Module):
         layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
 
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.pos_emb_ax = nn.Embedding(max_seq_len, dim)
-
-        # multiple sequence alignment position embedding
-
-        self.msa_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.msa_num_pos_emb = nn.Embedding(max_num_msas, dim)
 
         # template embedding
 
         self.template_dist_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
         self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
-        self.template_pos_emb = nn.Embedding(max_seq_len, dim)
-        self.template_pos_emb_ax = nn.Embedding(max_seq_len, dim)
 
         # projection for angles, if needed
 
@@ -722,7 +742,7 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = rotary_rpe))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True))),
                 prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
@@ -845,19 +865,12 @@ class Alphafold2(nn.Module):
         x = rearrange(x, 'b i d -> b () i () d') + rearrange(x, 'b j d-> b () () j d') # create pair-wise residue embeds
         x_mask = rearrange(mask, 'b i -> b () i ()') + rearrange(mask, 'b j -> b () () j') if exists(mask) else None
 
-        # axial positional embedding
-
-        pos_emb = rearrange(self.pos_emb(n_range), 'i d -> () i () d') + rearrange(self.pos_emb_ax(n_range), 'j d -> () () j d')
-        x += pos_emb
-
         # embed multiple sequence alignment (msa)
 
         m = None
         msa_shape = None
         if exists(msa):
             m = self.token_emb(msa)
-            m += self.msa_pos_emb(torch.arange(msa.shape[-1], device = device))[None, None, ...]
-            m += self.msa_num_pos_emb(torch.arange(msa.shape[1], device = device))[None, :, None, :]
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
@@ -867,7 +880,6 @@ class Alphafold2(nn.Module):
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-            m += self.msa_pos_emb(torch.arange(embedds.shape[-2], device = device))[None, None, ...]
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
@@ -929,9 +941,6 @@ class Alphafold2(nn.Module):
 
             template_num_pos_emb = self.template_num_pos_emb(torch.arange(num_templates, device = device))
             t += rearrange(template_num_pos_emb, 't d-> () t () () d')
-
-            pos_emb = rearrange(self.template_pos_emb(n_range), 'i d -> () () i () d') + rearrange(self.template_pos_emb_ax(n_range), 'j d -> () () () j d')
-            t += pos_emb
 
             assert t.shape[-2:] == x.shape[-2:]
 
