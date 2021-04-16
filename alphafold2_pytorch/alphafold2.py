@@ -333,12 +333,15 @@ class Attention(nn.Module):
         if exists(tie_attn_dim):
             q, k, v = map(lambda t: rearrange(t, '(b r) h n d -> b r h n d', r = tie_attn_dim), (q, k, v))
 
-            # when tying row-attention, one cannot have any masked out tokens
             if exists(mask):
-                assert torch.all(mask), 'you cannot have any padding if you are to tie the row attention across MSAs'
-                mask = None
+                mask = rearrange(mask, '(b r) n -> b r n', r = tie_attn_dim)
+                num_rows = (mask.sum(dim = -1) > 0).sum(dim = -1)
+                num_rows = rearrange(num_rows, 'b -> b () () ()')
+                mask = mask.sum(dim = 1) > 0
+            else:
+                num_rows = tie_attn_dim
 
-            dots = einsum('b r h i d, b r h j d -> b h i j', q, k) * self.scale * (tie_attn_dim ** -0.5)
+            dots = einsum('b r h i d, b r h j d -> b h i j', q, k) * self.scale * (num_rows ** -0.5)
         else:
             dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
