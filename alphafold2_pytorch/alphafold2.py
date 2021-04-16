@@ -338,7 +338,7 @@ class Attention(nn.Module):
                 has_rows = mask.any(dim = -1)
 
                 num_rows = has_rows.sum(dim = -1)
-                num_rows = rearrange(num_rows, 'b -> b () () ()')
+                num_rows = rearrange(num_rows, 'b -> b () () ()').to(q)
                 mask = mask.any(dim = 1)
 
                 # mask out the rows that have nothing as 0
