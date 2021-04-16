@@ -486,7 +486,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     magnitudes = distogram.sum(dim=-1)
     if center == "median":
         cum_dist = torch.cumsum(distogram, dim=-1)
-        medium   = 0.5 * cum_dist[..., -1]
+        medium   = 0.5 * cum_dist[..., -1:]
         central  = torch.searchsorted(cum_dist, medium).squeeze()
         central  = n_bins[ torch.min(central, max_bin_allowed) ]
     elif center == "mean":
