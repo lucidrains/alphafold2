@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from functools import wraps
 from einops import rearrange, repeat
+# import torch_sparse # only needed for sparse nth_deg adj calculation
 
 # bio 
 from Bio import SeqIO
@@ -378,6 +379,94 @@ def scn_atom_embedd(scn_seq):
                                            for aa in seq]).long().to(device).unsqueeze(0) )
     batch_tokens = torch.cat(batch_tokens, dim=0)
     return batch_tokens
+
+def nth_deg_adjacency(adj_mat, n=1, sparse=False):
+    """ Calculates the n-th degree adjacency matrix.
+        Performs mm of adj_mat and adds the newly added.
+        Default is dense. Mods for sparse version are done when needed.
+        Inputs: 
+        * adj_mat: (N, N) adjacency tensor
+        * n: int. degree of the output adjacency
+        * sparse: bool. whether to use torch-sparse module
+        Outputs: 
+        * edge_idxs: ij positions of the adjacency matrix
+        * edge_attrs: degree of connectivity (1 for neighs, 2 for neighs^2, ... )
+    """
+    adj_mat = adj_mat.float()
+    attr_mat = torch.zeros_like(adj_mat)
+    new_adj_mat = adj_mat.clone()
+        
+    for i in range(n):
+        if i == 0:
+            attr_mat += adj_mat
+            continue
+
+        if i == 1 and sparse: 
+            idxs = adj_mat.nonzero().t()
+            vals = adj_mat[idxs[0], idxs[1]]
+            new_idxs = idxs.clone()
+            new_vals = vals.clone() 
+            m, k, n = 3 * [adj_mat.shape[0]] # (m, n) * (n, k) , but adj_mats are squared: m=n=k            
+
+        if sparse:
+            new_idxs, new_vals = torch_sparse.spspmm(new_idxs, new_vals, idxs, vals, m=m, k=k, n=n)
+            new_vals = new_vals.bool().float()
+            new_adj_mat = torch.zeros_like(attr_mat)
+            new_adj_mat[new_idxs[0], new_idxs[1]] = new_vals
+            # sparse to dense is slower
+            # torch.sparse.FloatTensor(idxs, vals).to_dense()
+        else:
+            new_adj_mat = (new_adj_mat @ adj_mat).bool().float() 
+
+        attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
+
+    return new_adj_mat, attr_mat
+
+def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
+    """ Returns the idxs of covalent bonds for a protein.
+        Inputs 
+        * seq: (b, n) torch long.
+        * adj_degree: int. adjacency degree
+        * cloud_mask: mask selecting the present atoms.
+        * mat: whether to return as indexes or matrices. 
+               for indexes, only 1 seq is supported 
+        Outputs: edge_idxs, edge_attrs
+    """
+    # create or infer cloud_mask
+    if cloud_mask is None: 
+        cloud_mask = scn_cloud_mask(seq).bool()
+
+    device, precise = cloud_mask.device, cloud_mask.type()
+    # get starting poses for every aa
+    print(cloud_mask.shape)
+    adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
+    scaff = torch.zeros_like(cloud_mask[0])
+    scaff[:, 0] = 1
+    idxs = torch.nonzero(scaff).view(-1)
+    print(scaff)
+
+    for s,seq in enumerate(seqs): 
+        for i,idx in enumerate(idxs):
+            if i >= seq.shape[0]:
+                break
+            # offset by pos in chain ( intra-aa bonds + with next aa )
+            bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] ).t()
+            # delete link with next if not final
+            if i == idxs.shape[0]-1:
+                bonds = bonds[:, :-1]
+            # modify adj mat
+            adj_mat[s, bonds[0], bonds[1]] = 1
+        # convert to undirected
+        adj_mat[s] = adj_mat[s] + adj_mat[s].t()
+        # do N_th degree adjacency
+        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=True)
+
+    if mat: 
+        return attr_mat.bool().to(seqs.device), attr_mat.to(device)
+    else:
+        edge_idxs = attr_mat[0].nonzero().t().long()
+        edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
+        return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
 
 
 def nerf_torch(a, b, c, l, theta, chi):

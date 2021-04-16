@@ -1060,8 +1060,8 @@ class Alphafold2(nn.Module):
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
 
-        i = torch.arange(x.shape[1], device = device)
-        adj_mat = (i[:, None] >= (i[None, :] - 1)) & (i[:, None] <= (i[None, :] + 1))
+        adj_idxs, adj_num = prot_covalent_bond(seq, adj_degree=1, cloud_mask=cloud_mask)
+        adj_mat = adj_num.bool()
 
         # /adjacency mat calc - above should be pre-calculated and cached in a buffer
 
