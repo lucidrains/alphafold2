@@ -335,9 +335,15 @@ class Attention(nn.Module):
 
             if exists(mask):
                 mask = rearrange(mask, '(b r) n -> b r n', r = tie_attn_dim)
-                num_rows = mask.any(dim = -1).sum(dim = -1)
+                has_rows = mask.any(dim = -1)
+
+                num_rows = has_rows.sum(dim = -1)
                 num_rows = rearrange(num_rows, 'b -> b () () ()')
                 mask = mask.any(dim = 1)
+
+                # mask out the rows that have nothing as 0
+                row_mask = ~rearrange(has_rows, 'b r -> b r () () ()')
+                q.masked_fill_(row_mask, 0.)
             else:
                 num_rows = tie_attn_dim
 
