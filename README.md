@@ -201,7 +201,7 @@ model = Alphafold2(
 
 A <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">new paper</a> by <a href="https://github.com/rmrao">Roshan Rao</a> proposes using axial attention for pretraining on MSA's. Given the strong results, this repository will use the same scheme in the trunk, specifically for the MSA self-attention.
 
-You can also tie the row attentions of the MSA with the `msa_tie_row_attn = True` setting on initialization of `Alphafold2`. However, in order to use this, you must make sure that none of the rows in the batch of MSA is made of padding. In other words, your `msa_mask` must be completely set to `True`
+You can also tie the row attentions of the MSA with the `msa_tie_row_attn = True` setting on initialization of `Alphafold2`. However, in order to use this, you must make sure that if you have uneven number of MSAs per primary sequence, that the MSA mask is properly set to `False` for the rows not in use.
 
 ```python
 model = Alphafold2(
@@ -209,7 +209,7 @@ model = Alphafold2(
     depth = 2,
     heads = 8,
     dim_head = 64,
-    msa_tie_row_attn = True # just set this to true, but batches of MSA must not contain any row that is all padding
+    msa_tie_row_attn = True # just set this to true
 )
 ```
 
