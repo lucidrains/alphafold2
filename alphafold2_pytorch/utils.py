@@ -457,7 +457,7 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
         # convert to undirected
         adj_mat[s] = adj_mat[s] + adj_mat[s].t()
         # do N_th degree adjacency
-        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=True)
+        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=False) # True
 
     if mat: 
         return attr_mat.bool().to(seqs.device), attr_mat.to(device)
@@ -842,16 +842,21 @@ def kabsch_torch(X, Y, cpu=True):
     C = torch.matmul(X_, Y_.t()).detach()
     if cpu: 
         C = C.cpu()
-    # Optimal rotation matrix via SVD - warning! W must be transposed
-    svd_torch = torch.svd if int(torch.__version__.split(".")[1]) < 8 else torch.linalg.svd
-    V, S, W = svd_torch(C)
+    # Optimal rotation matrix via SVD
+    if int(torch.__version__.split(".")[1]) < 8:
+        # warning! int torch 1.<8 : W must be transposed
+        V, S, W = svd_torch(C)
+        W = W.t()
+    else: 
+        V, S, W = svd_torch(C)
+    
     # determinant sign for direction correction
     d = (torch.det(V) * torch.det(W)) < 0.0
     if d:
         S[-1]    = S[-1] * (-1)
         V[:, -1] = V[:, -1] * (-1)
     # Create Rotation matrix U
-    U = torch.matmul(V, W.t()).to(device)
+    U = torch.matmul(V, W).to(device)
     # calculate rotations
     X_ = torch.matmul(X_.t(), U).t()
     # return centered and aligned
