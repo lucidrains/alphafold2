@@ -846,7 +846,8 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False
+        return_confidence = False,
+        use_eigen_mds = False
     ):
         n, device = seq.shape[1], seq.device
         n_range = torch.arange(n, device = device)
@@ -1021,7 +1022,7 @@ class Alphafold2(nn.Module):
         weights.masked_fill_( torch.logical_not(bb_flat_mask_crossed), 0.)
 
         coords_3d, _ = MDScaling(distances, 
-            weights = weights,
+            weights = weights if not use_eigen_mds else None,
             iters = self.mds_iters,
             fix_mirror = True,
             N_mask = N_mask,
@@ -1060,8 +1061,8 @@ class Alphafold2(nn.Module):
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
 
-        i = torch.arange(x.shape[1], device = device)
-        adj_mat = (i[:, None] >= (i[None, :] - 1)) & (i[:, None] <= (i[None, :] + 1))
+        adj_idxs, adj_num = prot_covalent_bond(seq, adj_degree=1, cloud_mask=cloud_mask)
+        adj_mat = adj_num.bool()
 
         # /adjacency mat calc - above should be pre-calculated and cached in a buffer
 
