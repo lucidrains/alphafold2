@@ -438,12 +438,10 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
 
     device, precise = cloud_mask.device, cloud_mask.type()
     # get starting poses for every aa
-    print(cloud_mask.shape)
     adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
     scaff = torch.zeros_like(cloud_mask[0])
     scaff[:, 0] = 1
     idxs = torch.nonzero(scaff).view(-1)
-    print(scaff)
 
     for s,seq in enumerate(seqs): 
         for i,idx in enumerate(idxs):
@@ -609,6 +607,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         * historic_stresses: (batch x steps)
     """
     device, dtype = pre_dist_mat.device, pre_dist_mat.type()
+    svd_torch = torch.svd_lowrank if int(torch.__version__.split(".")[1]) < 8 else torch.linalg.svd_lowrank
 
     # start
     batch, N, _ = pre_dist_mat.shape
@@ -845,7 +844,8 @@ def kabsch_torch(X, Y, cpu=True):
     if cpu: 
         C = C.cpu()
     # Optimal rotation matrix via SVD - warning! W must be transposed
-    V, S, W = torch.svd(C)
+    svd_torch = torch.svd if int(torch.__version__.split(".")[1]) < 8 else torch.linalg.svd
+    V, S, W = svd_torch(C)
     # determinant sign for direction correction
     d = (torch.det(V) * torch.det(W)) < 0.0
     if d:

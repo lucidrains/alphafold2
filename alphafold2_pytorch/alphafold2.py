@@ -846,7 +846,8 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False
+        return_confidence = False,
+        use_eigen_mds = False
     ):
         n, device = seq.shape[1], seq.device
         n_range = torch.arange(n, device = device)
@@ -1021,7 +1022,7 @@ class Alphafold2(nn.Module):
         weights.masked_fill_( torch.logical_not(bb_flat_mask_crossed), 0.)
 
         coords_3d, _ = MDScaling(distances, 
-            weights = weights,
+            weights = weights if not use_eigen_mds else None,
             iters = self.mds_iters,
             fix_mirror = True,
             N_mask = N_mask,
