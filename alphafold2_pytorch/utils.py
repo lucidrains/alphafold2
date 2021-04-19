@@ -607,7 +607,6 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         * historic_stresses: (batch x steps)
     """
     device, dtype = pre_dist_mat.device, pre_dist_mat.type()
-    svd_torch = torch.svd_lowrank if int(torch.__version__.split(".")[1]) < 8 else torch.linalg.svd_lowrank
 
     # start
     batch, N, _ = pre_dist_mat.shape
