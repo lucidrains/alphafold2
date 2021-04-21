@@ -17,9 +17,9 @@ setup(
   install_requires=[
     'einops>=0.3',
     'En-transformer>=0.1.10',
-    'lie-transformer-pytorch',
     'mdtraj>=1.8',
     'numpy',
+    'performer-pytorch>=1.0.9',
     'proDy',
     'requests',
     'se3-transformer-pytorch>=0.2.5',
