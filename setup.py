@@ -19,7 +19,7 @@ setup(
     'En-transformer>=0.1.10',
     'mdtraj>=1.8',
     'numpy',
-    'performer-pytorch>=1.0.9',
+    'performer-pytorch>=1.0.11',
     'proDy',
     'requests',
     'se3-transformer-pytorch>=0.2.5',
