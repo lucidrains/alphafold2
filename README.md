@@ -12,6 +12,12 @@ Once this is replicated, I intend to fold all available amino acid sequences out
 $ pip install alphafold2-pytorch
 ```
 
+## Status
+
+<a href="https://github.com/lhatsk">lhatsk</a> has reported training a modified trunk of this repository, using the same setup as trRosetta, with better results
+
+<img src="./images/axial_attention_vs_trrosetta.jpg" width="500px"></img>
+
 ## Usage
 
 Predicting distogram, like Alphafold-1, but with attention
