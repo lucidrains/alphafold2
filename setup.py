@@ -26,7 +26,8 @@ setup(
     'sidechainnet',
     'torch>=1.6',
     'tqdm',
-    'biopython'
+    'biopython',
+    'tensorboard'
   ],
   setup_requires=[
     'pytest-runner',
