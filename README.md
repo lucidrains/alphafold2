@@ -18,6 +18,8 @@ $ pip install alphafold2-pytorch
 
 <img src="./images/axial_attention_vs_trrosetta.jpg" width="400px"></img>
 
+"blue used the the trRosetta input (MSA -> potts -> axial attention), green used the ESM embedding (only sequence) -> tiling -> axial attention" - lhatsk
+
 ## Usage
 
 Predicting distogram, like Alphafold-1, but with attention
