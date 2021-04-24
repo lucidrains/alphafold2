@@ -251,9 +251,8 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_typ
             * embedd_dim: number of embedding dimensions. 
                           768 for MSA_Transformer and 1280 for ESM-1b
     """
-    seq = expand_dims_to(seq, 2 - len(seq.shape))
     str_seq = ["".join([VOCAB._int2char[x] for x in s]) for s in seq.cpu().numpy()]
-    # use MSA transformer
+    # use MSA transformer
     if msa_data is not None: 
         msa_batch_labels, msa_batch_strs, msa_batch_tokens = batch_converter(msa_data)
         with torch.no_grad():
@@ -263,7 +262,7 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_typ
         
     # base ESM case
     else: 
-        batch_labels, batch_strs, batch_tokens = batch_converter( [(i, str_seq[i]) for i in range(str_seq[0])] )
+        batch_labels, batch_strs, batch_tokens = batch_converter( [(i, str_seq[i]) for i in range(seq.shape[0])] )
         with torch.no_grad():
             results = embedd_model(batch_tokens.to(seq.device), repr_layers=[33], return_contacts=False)
         # index 0 is for start token. so take from 1 one
@@ -273,7 +272,6 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, embedd_typ
     if embedd_type == "mean":
         token_reps = token_reps.mean(dim=1)
     return token_reps
-
 
 
 def get_all_protein_ids(dataloader, verbose=False):
@@ -612,27 +610,27 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
     batch, N, _ = pre_dist_mat.shape
     diag_idxs = np.arange(N)
     his = [torch.tensor([np.inf]*batch, device=device)]
+    # ensure batched MDS
+    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
 
     # do it by eigendecomposition - way faster but not weights
     # https://www.biorxiv.org/content/10.1101/2020.11.27.401232v1.full.pdf
-    if eigen == True and weights is None:
-        preds_3d = []
-        for bi in range(pre_dist_mat.shape[0]):
-            D = pre_dist_mat[bi]**2
-            M = D[:1, :] + D[:, :1] - D 
-            u,s,v = torch.svd_lowrank(M/2)
-            preds_3d.append( (u@torch.diag(s).sqrt())[:, :3].t() )
-        return torch.stack(preds_3d, dim=0), torch.zeros_like(torch.stack(his, dim=0))
-    elif eigen == True:
-        if verbose: 
-            print("Can't use eigen flag if weights are active. Fallback to iterative")
+    if eigen == True:
+        if weights is None:
+            preds_3d = []
+            for bi in range(pre_dist_mat.shape[0]):
+                D = pre_dist_mat[bi]**2
+                M = D[:1, :] + D[:, :1] - D 
+                u,s,v = torch.svd_lowrank(M/2)
+                preds_3d.append( (u@torch.diag(s).sqrt())[:, :3].t() )
+            return torch.stack(preds_3d, dim=0), torch.zeros_like(torch.stack(his, dim=0))
+        else:
+            if verbose:
+                print("Can't use eigen flag if weights are active. Fallback to iterative")
 
     # continue the iterative way
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
-
-    # ensure batched MDS
-    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
 
     # init random coords
     best_stress = float("Inf") * torch.ones(batch, device = device).type(dtype)
@@ -651,6 +649,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         # update
         coords = (1. / N * torch.matmul(B, best_3d_coords))
         dis = torch.norm(coords, dim=(-1, -2))
+
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
@@ -845,10 +844,10 @@ def kabsch_torch(X, Y, cpu=True):
     # Optimal rotation matrix via SVD
     if int(torch.__version__.split(".")[1]) < 8:
         # warning! int torch 1.<8 : W must be transposed
-        V, S, W = svd_torch(C)
+        V, S, W = torch.svd(C)
         W = W.t()
     else: 
-        V, S, W = svd_torch(C)
+        V, S, W = torch.linalg.svd(C)
     
     # determinant sign for direction correction
     d = (torch.det(V) * torch.det(W)) < 0.0
@@ -980,17 +979,17 @@ def tmscore_numpy(X, Y):
 
 def mdscaling_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5,
                     fix_mirror=True, N_mask=None, CA_mask=None, C_mask=None, 
-                    eigen=True, verbose=2):
+                    eigen=False, verbose=2):
     """ Handles the specifics of MDS for proteins (mirrors, ...) """
     # batched mds for full parallel 
     preds, stresses = mds_torch(pre_dist_mat, weights=weights,iters=iters, 
-                                              tol=tol, eigen=True, verbose=verbose)
+                                              tol=tol, eigen=eigen, verbose=verbose)
     if not fix_mirror:
         return preds, stresses
 
     # no need to caculate multiple mirrors - just correct Z axis
     phi_ratios = calc_phis_torch(preds, N_mask, CA_mask, C_mask, prop=True)
-    to_correct = torch.nonzero( (phi_ratios < 0.5) ).view(-1)
+    to_correct = torch.nonzero( (phi_ratios < 0.5)).view(-1)
     # fix mirrors by (-1)*Z if more (+) than (-) phi angles
     preds[to_correct, -1] = (-1)*preds[to_correct, -1]
     if verbose == 2:
