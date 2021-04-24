@@ -12,6 +12,12 @@ Once this is replicated, I intend to fold all available amino acid sequences out
 $ pip install alphafold2-pytorch
 ```
 
+## Status
+
+<a href="https://github.com/lhatsk">lhatsk</a> has reported training a modified trunk of this repository, using the same setup as trRosetta, with competitive results
+
+<img src="./images/axial_attention_vs_trrosetta.jpg" width="400px"></img>
+
 ## Usage
 
 Predicting distogram, like Alphafold-1, but with attention
@@ -178,6 +184,38 @@ model = Alphafold2(
     dim_head = 64,
     max_seq_len = 2048,                   # the maximum sequence length, this is required for sparse attention. the input cannot exceed what is set here
     sparse_self_attn = (True, False) * 6  # interleave sparse and full attention for all 12 layers
+).cuda()
+```
+
+## Linear Attention
+
+I have also added one of the best <a href="https://github.com/lucidrains/performer-pytorch">linear attention</a> variants, in the hope of lessening the burden of cross attending. I personally have not found Performer to work that well, but since in the paper they reported some ok numbers for protein benchmarks, I thought I'd include it and allow others to experiment.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_linear = True # simply set this to True to use Performer for all cross attention
+).cuda()
+```
+
+You can also specify the exact layers you wish to use linear attention by passing in a tuple of the same length as the depth
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 6,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_linear = (True, False) * 3 # interleave linear and full attention
 ).cuda()
 ```
 

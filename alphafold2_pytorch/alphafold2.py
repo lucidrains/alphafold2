@@ -19,6 +19,7 @@ from alphafold2_pytorch.reversible import ReversibleSequence
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
+from performer_pytorch import FastAttention, ProjectionUpdater
 
 # constants
 
@@ -380,6 +381,43 @@ class Attention(nn.Module):
 
         return out
 
+class LinearAttention(Attention):
+    def __init__(self, *args, dim_head = 64, nb_features = 256, **kwargs):
+        kwargs.update(dim_head = dim_head)
+        super().__init__(*args, **kwargs)
+
+        self.fast_attn = FastAttention(
+            dim_heads = dim_head,
+            nb_features = nb_features
+        )
+
+    def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
+        device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
+
+        context = default(context, x)
+
+        q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
+
+        i, j = q.shape[-2], k.shape[-2]
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
+        # linear attention masking
+
+        if exists(mask) or exists(context_mask):
+            mask = default(mask, lambda: torch.ones(1, i, device = device).bool())
+            context_mask = default(context_mask, mask) if not has_context else default(context_mask, lambda: torch.ones(1, j, device = device).bool())
+            v = v.masked_fill(context_mask[:, None, :, None], 0.)
+
+        # fast linear attention
+
+        out = self.fast_attn(q, k, v)
+
+        # combine heads and project out
+
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
+
 class SparseAttention(Attention):
     def __init__(
         self,
@@ -655,12 +693,14 @@ class Alphafold2(nn.Module):
         structure_module_dim_head = 4,
         structure_module_refinement_iters = 2,
         structure_module_knn = 0,
-        structure_module_adj_neighbors = 2
+        structure_module_adj_neighbors = 2,
+        cross_attn_linear = False,
+        cross_attn_linear_projection_update_every = 1000
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
 
-        layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
+        # token embedding
 
         self.token_emb = nn.Embedding(num_tokens, dim)
 
@@ -712,6 +752,11 @@ class Alphafold2(nn.Module):
 
         self.embedd_project = nn.Linear(num_embedds, dim)
 
+        # attention types
+
+        layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
+        layers_cross_attn_linear = cast_tuple(cross_attn_linear, depth)
+
         # main trunk modules
 
         prenorm = partial(PreNorm, dim)
@@ -720,7 +765,7 @@ class Alphafold2(nn.Module):
         layers = nn.ModuleList([])
         attn_types = islice(cycle(attn_types), depth)
 
-        for ind, layer_sparse_attn, attn_type in zip(range(depth), layers_sparse_attn, attn_types):
+        for ind, layer_sparse_attn, layer_cross_attn_linear, attn_type in zip(range(depth), layers_sparse_attn, layers_cross_attn_linear, attn_types):
 
             # alternate between row and column attention to save memory each layer
 
@@ -752,10 +797,15 @@ class Alphafold2(nn.Module):
 
             intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
 
+            if layer_cross_attn_linear:
+                cross_attn_fn = lambda: LinearAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
+            else:
+                cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
+
             layers.append(nn.ModuleList([
-                intercept_fn(context = False, attn = prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio))),
+                intercept_fn(context = False, attn = prenorm_cross(cross_attn_fn())),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio))),
+                intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -764,6 +814,12 @@ class Alphafold2(nn.Module):
 
         trunk_class = SequentialSequence if not reversible else ReversibleSequence
         self.net = trunk_class(layers)
+
+        # updating linear attention projections, if there exists linear attention
+
+        self.has_linear_attn = any(layers_cross_attn_linear)
+        if self.has_linear_attn:
+            self.proj_updater = ProjectionUpdater(self.net, cross_attn_linear_projection_update_every)
 
         # to distogram output
 
@@ -833,6 +889,11 @@ class Alphafold2(nn.Module):
         # aux confidence measure
         self.lddt_linear = nn.Linear(structure_module_dim, 1)
 
+    def fix_projections_(self):
+        if not self.has_linear_attn:
+            return
+        self.proj_updater.fix_projections_()
+
     def forward(
         self,
         seq,
@@ -849,6 +910,13 @@ class Alphafold2(nn.Module):
         return_confidence = False,
         use_eigen_mds = False
     ):
+        # update linear projections
+
+        if self.has_linear_attn:
+            self.proj_updater.redraw_projections()
+
+        # variables
+
         n, device = seq.shape[1], seq.device
         n_range = torch.arange(n, device = device)
 
