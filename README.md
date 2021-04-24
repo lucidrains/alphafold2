@@ -18,7 +18,7 @@ $ pip install alphafold2-pytorch
 
 <img src="./images/axial_attention_vs_trrosetta.jpg" width="400px"></img>
 
-"blue used the the trRosetta input (MSA -> potts -> axial attention), green used the ESM embedding (only sequence) -> tiling -> axial attention" - lhatsk
+`blue used the the trRosetta input (MSA -> potts -> axial attention), green used the ESM embedding (only sequence) -> tiling -> axial attention` - lhatsk
 
 ## Usage
 
@@ -133,7 +133,7 @@ cd apex
 pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
 ```
 
-Next, you will simply have to import and wrap your `Alphafold2` instance with a `ESMEmbedWrapper` or `MSAEmbedWrapper` and it will take care of embedding both the sequence and the multiple-sequence alignments for you (and projecting it to the dimensions as specified on your model). Nothing needs to be changed saved for adding the wrapper.
+Next, you will simply have to import and wrap your `Alphafold2` instance with a `ESMEmbedWrapper` or `MSAEmbedWrapper` and it will take care of embedding both the sequence and the multiple-sequence alignments for you (and projecting it to the dimensions as specified on your model). Nothing needs to be changed save for adding the wrapper.
 
 ```python
 import torch
@@ -180,7 +180,7 @@ alphafold2 = Alphafold2(
 Todo:
 
 - [x] make sure MSA Transformer embeddings work
-- [ ] process MSA embeddings one by one if any rows are pure padding
+- [x] process MSA embeddings one by one if any rows are pure padding
 - [ ] make sure ESM embedding wrapper works
 
 ## Real-Value Distance Prediction
