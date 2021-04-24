@@ -180,7 +180,7 @@ alphafold2 = Alphafold2(
 Todo:
 
 - [x] make sure MSA Transformer embeddings work
-- [ ] process MSA embeddings one by one if any rows are pure padding
+- [x] process MSA embeddings one by one if any rows are pure padding
 - [ ] make sure ESM embedding wrapper works
 
 ## Real-Value Distance Prediction
