@@ -659,7 +659,6 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
                                                                    stress / dis))
             break
 
-        pre_dist_mat = dist_mat
         best_3d_coords = coords
         his.append( stress / dis )
 
