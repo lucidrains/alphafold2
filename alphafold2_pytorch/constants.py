@@ -12,10 +12,19 @@ THETA_BUCKETS = 25
 PHI_BUCKETS = 13
 OMEGA_BUCKETS = 25
 
+# embedding related constants
+
+MSA_EMBED_DIM = 768
+ESM_EMBED_DIM = 1280
+MSA_MODEL_PATH = ["facebookresearch/esm", "esm_msa1_t12_100M_UR50S"]
+ESM_MODEL_PATH = ["facebookresearch/esm", "esm1b_t33_650M_UR50S"]
+
 # default device
 
 DEVICE_NAME = 'cuda' if torch.cuda.is_available() else 'cpu'
 DEVICE = torch.device(DEVICE_NAME)
+
+# aminoacid data
 
 AA_DATA = { 
     'A': {

@@ -4,7 +4,7 @@ from alphafold2_pytorch.utils import *
 
 def test_main():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32
@@ -25,7 +25,7 @@ def test_main():
 
 def test_anglegrams():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,
@@ -47,7 +47,7 @@ def test_anglegrams():
 
 def test_msa_tie_row_attn():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,
@@ -69,7 +69,7 @@ def test_msa_tie_row_attn():
 
 def test_templates():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,
@@ -98,7 +98,7 @@ def test_templates():
 
 def test_embeddings():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32
@@ -129,7 +129,7 @@ def test_embeddings():
 
 def test_coords_se3():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,
@@ -159,7 +159,7 @@ def test_coords_se3():
 
 def test_edges_to_equivariant_network():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 1,
         heads = 2,
         dim_head = 32,
@@ -186,10 +186,10 @@ def test_edges_to_equivariant_network():
 
 def test_real_value_distance_with_coords():
     model = Alphafold2(
-        dim = 256,
-        depth = 2,
+        dim = 32,
+        depth = 1,
         heads = 2,
-        dim_head = 32,
+        dim_head = 16,
         predict_coords = True,
         predict_real_value_distances = True,
         num_backbone_atoms = 3,
@@ -340,7 +340,7 @@ def test_confidence_En():
 
 def test_reversible():
     model = Alphafold2(
-        dim = 256,
+        dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,

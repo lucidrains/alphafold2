@@ -78,6 +78,14 @@ def apply_rotary_pos_emb(q, k, sinu_pos):
 
 # helper classes
 
+class Always(nn.Module):
+    def __init__(self, val):
+        super().__init__()
+        self.val = val
+
+    def forward(self, x):
+        return self.val
+
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -695,14 +703,18 @@ class Alphafold2(nn.Module):
         structure_module_knn = 0,
         structure_module_adj_neighbors = 2,
         cross_attn_linear = False,
-        cross_attn_linear_projection_update_every = 1000
+        cross_attn_linear_projection_update_every = 1000,
+        disable_token_embed = False
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
 
+        self.dim = dim
+
         # token embedding
 
-        self.token_emb = nn.Embedding(num_tokens, dim)
+        self.token_emb = nn.Embedding(num_tokens, dim) if not disable_token_embed else Always(0)
+        self.disable_token_embed = disable_token_embed
 
         # template embedding
 
@@ -900,6 +912,8 @@ class Alphafold2(nn.Module):
         msa = None,
         mask = None,
         msa_mask = None,
+        seq_embed = None,
+        msa_embed = None,
         templates_seq = None,
         templates_dist = None,
         templates_mask = None,
@@ -910,6 +924,9 @@ class Alphafold2(nn.Module):
         return_confidence = False,
         use_eigen_mds = False
     ):
+        assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
+        assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
+
         # update linear projections
 
         if self.has_linear_attn:
@@ -929,6 +946,9 @@ class Alphafold2(nn.Module):
 
         x = self.token_emb(seq)
 
+        if exists(seq_embed):
+            x += seq_embed
+
         # outer sum
 
         x = rearrange(x, 'b i d -> b () i () d') + rearrange(x, 'b j d-> b () () j d') # create pair-wise residue embeds
@@ -940,6 +960,9 @@ class Alphafold2(nn.Module):
         msa_shape = None
         if exists(msa):
             m = self.token_emb(msa)
+
+            if exists(msa_embed):
+                m += msa_embed
 
             msa_shape = m.shape
             m = rearrange(m, 'b m n d -> b (m n) d')
