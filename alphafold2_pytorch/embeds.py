@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from alphafold2_pytorch.utils import get_msa_embedd, get_esm_embedd, exists
-from alphafold2_pytorch.constants import MSA_MODEL_PATH, MSA_EMBED_DIM
+from alphafold2_pytorch.constants import MSA_MODEL_PATH, MSA_EMBED_DIM, ESM_MODEL_PATH, ESM_EMBED_DIM
 
 from einops import rearrange
 

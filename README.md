@@ -149,7 +149,7 @@ alphafold2 = Alphafold2(
 
 model = MSAEmbedWrapper(
     alphafold2 = alphafold2
-)
+).cuda()
 
 seq = torch.randint(0, 21, (2, 16)).cuda()
 mask = torch.ones_like(seq).bool().cuda()
