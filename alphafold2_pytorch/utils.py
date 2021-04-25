@@ -641,25 +641,28 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         * historic_stresses: (batch x steps)
     """
     device, dtype = pre_dist_mat.device, pre_dist_mat.type()
-
+    # ensure batched MDS
+    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
     # start
     batch, N, _ = pre_dist_mat.shape
     diag_idxs = np.arange(N)
     his = [torch.tensor([np.inf]*batch, device=device)]
-    # ensure batched MDS
-    pre_dist_mat = expand_dims_to(pre_dist_mat, length = ( 3 - len(pre_dist_mat.shape) ))
 
     # do it by eigendecomposition - way faster but not weights
     # https://www.biorxiv.org/content/10.1101/2020.11.27.401232v1.full.pdf
     if eigen == True:
         if weights is None:
-            preds_3d = []
-            for bi in range(pre_dist_mat.shape[0]):
-                D = pre_dist_mat[bi]**2
-                M = D[:1, :] + D[:, :1] - D 
-                u,s,v = torch.svd_lowrank(M/2)
-                preds_3d.append( (u@torch.diag(s).sqrt())[:, :3].t() )
-            return torch.stack(preds_3d, dim=0), torch.zeros_like(torch.stack(his, dim=0))
+            D = pre_dist_mat**2
+            M =  0.5 * (D[:, :1, :] + D[:, :, :1] - D) 
+            # do loop svd bc it's faster: (2-3x in CPU and 1-2x in GPU)
+            # https://discuss.pytorch.org/t/batched-svd-lowrank-being-much-slower-than-loop-implementation-both-cpu-and-gpu/119336
+            svds = [torch.svd_lowrank(mi) for mi in M]
+            u = torch.stack([svd[0] for svd in svds], dim=0)
+            s = torch.stack([svd[1] for svd in svds], dim=0)
+            v = torch.stack([svd[2] for svd in svds], dim=0)
+            preds_3d = torch.transpose( torch.bmm(u, torch.diag_embed(s).sqrt())[..., :3], -1, -2)
+            
+            return preds_3d, torch.zeros_like(torch.stack(his, dim=0))
         else:
             if verbose:
                 print("Can't use eigen flag if weights are active. Fallback to iterative")
