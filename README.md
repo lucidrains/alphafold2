@@ -177,12 +177,6 @@ alphafold2 = Alphafold2(
 )
 ```
 
-Todo:
-
-- [x] make sure MSA Transformer embeddings work
-- [x] process MSA embeddings one by one if any rows are pure padding
-- [ ] make sure ESM embedding wrapper works
-
 ## Real-Value Distance Prediction
 
 A <a href="https://www.biorxiv.org/content/10.1101/2020.11.26.400523v1.full.pdf">paper</a> by Jinbo Xu suggests that one doesn't need to bin the distances, and can instead predict the mean and standard deviation directly. You can use this by turning on one flag `predict_real_value_distances`, in which case, the distance prediction returned will have a dimension of `2` for the mean and standard deviation respectively.
