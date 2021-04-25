@@ -648,32 +648,29 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
     diag_idxs = np.arange(N)
     his = [torch.tensor([np.inf]*batch, device=device)]
 
-    # do it by eigendecomposition - way faster but not weights
-    # https://www.biorxiv.org/content/10.1101/2020.11.27.401232v1.full.pdf
-    if eigen == True:
-        if weights is None:
-            D = pre_dist_mat**2
-            M =  0.5 * (D[:, :1, :] + D[:, :, :1] - D) 
-            # do loop svd bc it's faster: (2-3x in CPU and 1-2x in GPU)
-            # https://discuss.pytorch.org/t/batched-svd-lowrank-being-much-slower-than-loop-implementation-both-cpu-and-gpu/119336
-            svds = [torch.svd_lowrank(mi) for mi in M]
-            u = torch.stack([svd[0] for svd in svds], dim=0)
-            s = torch.stack([svd[1] for svd in svds], dim=0)
-            v = torch.stack([svd[2] for svd in svds], dim=0)
-            preds_3d = torch.transpose( torch.bmm(u, torch.diag_embed(s).sqrt())[..., :3], -1, -2)
-            
-            return preds_3d, torch.zeros_like(torch.stack(his, dim=0))
-        else:
-            if verbose:
-                print("Can't use eigen flag if weights are active. Fallback to iterative")
+    # initialize by eigendecomposition: https://www.lptmc.jussieu.fr/user/lesne/bioinformatics.pdf
+    # follow : https://www.biorxiv.org/content/10.1101/2020.11.27.401232v1.full.pdf
+    D = pre_dist_mat**2
+    M =  0.5 * (D[:, :1, :] + D[:, :, :1] - D) 
+    # do loop svd bc it's faster: (2-3x in CPU and 1-2x in GPU)
+    # https://discuss.pytorch.org/t/batched-svd-lowrank-being-much-slower-than-loop-implementation-both-cpu-and-gpu/119336
+    svds = [torch.svd_lowrank(mi) for mi in M]
+    u = torch.stack([svd[0] for svd in svds], dim=0)
+    s = torch.stack([svd[1] for svd in svds], dim=0)
+    v = torch.stack([svd[2] for svd in svds], dim=0)
+    best_3d_coords = torch.bmm(u, torch.diag_embed(s).sqrt())[..., :3]
+
+    # only eigen - way faster but not weights
+    if weights is None and eigen==True:
+        return torch.transpose( best_3d_coords, -1, -2), torch.zeros_like(torch.stack(his, dim=0))
+    elif eigen==True:
+        if verbose:
+            print("Can't use eigen flag if weights are active. Fallback to iterative")
 
     # continue the iterative way
     if weights is None:
         weights = torch.ones_like(pre_dist_mat)
 
-    # init random coords
-    best_stress = float("Inf") * torch.ones(batch, device = device).type(dtype)
-    best_3d_coords = 2*torch.rand(batch, N, 3, device = device).type(dtype) - 1
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
@@ -692,7 +689,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
         if verbose >= 2:
             print('it: %d, stress %s' % (i, stress))
         # update metrics if relative improvement above tolerance
-        if (best_stress - stress / dis).mean() <= tol:
+        if (his[-1] - stress / dis).mean() <= tol:
             if verbose:
                 print('breaking at iteration %d with stress %s' % (i,
                                                                    stress / dis))
