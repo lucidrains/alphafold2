@@ -13,6 +13,7 @@ import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.utils import get_bucketed_distance_matrix
 from alphafold2_pytorch.transformer import Seq2SeqTransformer
 import time
+import os
 
 # constants
 
@@ -22,9 +23,20 @@ NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = 21
-# todo change protein sequence threshold length
 THRESHOLD_LENGTH = 250
+BATCH_SIZE = 100
 
+# transformer constants
+
+SRC_VOCAB_SIZE = 22  # number of amino acids + padding 21
+TGT_VOCAB_SIZE = 3  # backbone torsion angle
+NUM_ENCODER_LAYERS = 3
+NUM_DECODER_LAYERS = 3
+EMB_SIZE = 512
+NUM_HEAD = 8
+FFN_HID_DIM = 512
+
+MODEL_PATH = f"model_{THRESHOLD_LENGTH}_{NUM_ENCODER_LAYERS}_{NUM_DECODER_LAYERS}_{FFN_HID_DIM}.pt"
 # set device
 
 DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
@@ -172,12 +184,13 @@ def evaluate(model, val_iter):
 raw_data = scn.load(
     casp_version=12,
     thinning=30,
-    batch_size=100,
+    batch_size=BATCH_SIZE,
     dynamic_batching=False
 )
 
 filtered_raw_data = filter_dictionary_by_seq_length(raw_data, THRESHOLD_LENGTH, "train")
 writer_train = SummaryWriter("runs/train")
+writer_train_eval = SummaryWriter("runs/train_eval")
 writer_valids = []
 for split in scn.utils.download.VALID_SPLITS:
     filtered_raw_data = filter_dictionary_by_seq_length(filtered_raw_data, THRESHOLD_LENGTH, f'{split}')
@@ -185,7 +198,7 @@ for split in scn.utils.download.VALID_SPLITS:
 data = prepare_dataloaders(
     filtered_raw_data,
     aggregate_model_input=True,
-    batch_size=100,
+    batch_size=BATCH_SIZE,
     num_workers=4,
     seq_as_onehot=None,
     collate_fn=None,
@@ -204,13 +217,6 @@ dl = iter(data['train'])
 # ).to(DEVICE)
 
 #
-SRC_VOCAB_SIZE = 22  # number of amino acids + padding 21
-TGT_VOCAB_SIZE = 3  # backbone torsion angle
-NUM_ENCODER_LAYERS = 3
-NUM_DECODER_LAYERS = 3
-EMB_SIZE = 512
-NUM_HEAD = 8
-FFN_HID_DIM = 512
 transformer = Seq2SeqTransformer(num_encoder_layers=NUM_ENCODER_LAYERS, num_decoder_layers=NUM_DECODER_LAYERS,
                                  emb_size=EMB_SIZE, src_vocab_size=SRC_VOCAB_SIZE, tgt_vocab_size=TGT_VOCAB_SIZE,
                                  dim_feedforward=FFN_HID_DIM, num_head=NUM_HEAD)
@@ -228,29 +234,52 @@ loss_fn = torch.nn.MSELoss()
 optimizer = torch.optim.Adam(
     transformer.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9
 )
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
 
-# todo checkpoint routine
+prev_epoch = 0
+if os.path.exists(MODEL_PATH):
+    checkpoint = torch.load(MODEL_PATH)
+    transformer.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    if 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    prev_epoch = checkpoint['epoch']
+    loss = checkpoint['loss']
+    print(f"restore checkpoint. Epoch: {prev_epoch}, loss: {loss:.3f}")
 # training loop
-for epoch in range(1, NUM_EPOCHS + 1):
+for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
     start_time = time.time()
     train_loss = train_epoch(transformer, iter(data['train']), optimizer)
     end_time = time.time()
+#    train_eval_loss = evaluate(transformer, iter(data['train-eval']))
+    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "  # Train eval loss: {train_eval_loss:.3f}, "
+           f"Epoch time = {(end_time - start_time):.3f}s"))
     valid_count = 0
     for split in scn.utils.download.VALID_SPLITS:
         val_loss = evaluate(transformer, iter(data[f'{split}']))
         writer_valids[valid_count].add_scalar("loss", val_loss, epoch)
         writer_valids[valid_count].flush()
+        print(f"Epoch: {epoch}, {split} loss: {val_loss:.3f}")
         valid_count += 1
     writer_train.add_scalar("loss", train_loss, epoch)
     writer_train.flush()
-    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Val loss: {val_loss:.3f}, "
-           f"Epoch time = {(end_time - start_time):.3f}s"))
+    # writer_train_eval.add_scalar("loss", train_eval_loss, epoch)
+    # writer_train_eval.flush()
+    scheduler.step(train_loss)
     torch.save({
         'epoch': epoch,
         'model_state_dict': transformer.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'loss': train_loss,
-    }, "model.pt")
+    }, MODEL_PATH)
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': transformer.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss': train_loss,
+    }, f"model_{THRESHOLD_LENGTH}_{NUM_ENCODER_LAYERS}_{NUM_DECODER_LAYERS}_{FFN_HID_DIM}_{epoch}.pt")
 print('train ended')
 writer_train.close()
 valid_count = 0
