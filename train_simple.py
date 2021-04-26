@@ -21,8 +21,9 @@ NUM_EPOCHS = int(1e3)
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
-IGNORE_INDEX = -100
-THRESHOLD_LENGTH = 50
+IGNORE_INDEX = 21
+# todo change protein sequence threshold length
+THRESHOLD_LENGTH = 250
 
 # set device
 
@@ -83,7 +84,7 @@ def filter_dictionary_by_seq_length(raw_data, seq_length_threshold, portion):
             new_data["res"].append(res)
     if n_filtered_entries:
         print(
-            f"{total_entires - n_filtered_entries:.0f} out of {total_entires:.0f} ({(total_entires - n_filtered_entries) / total_entires:.1%})"
+            f"{portion}: {total_entires - n_filtered_entries:.0f} out of {total_entires:.0f} ({(total_entires - n_filtered_entries) / total_entires:.1%})"
             f" training set entries were included if sequence length <= {seq_length_threshold}")
     raw_data[portion] = new_data
     return raw_data
@@ -107,11 +108,11 @@ def train_epoch(model, train_iter, optimizer):
 
         seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
             DEVICE).bool()
-        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=0)
+        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
         angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
         # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
-        mask = F.pad(mask, (0, THRESHOLD_LENGTH - l), value=False)
+        mask = ~F.pad(mask, (0, THRESHOLD_LENGTH - l, 0, THRESHOLD_LENGTH - l), value=False)
 
         # discretized_distances = get_bucketed_distance_matrix(coords[:, :, 1], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
         src_padding_mask, tgt_padding_mask = create_mask(seq, seq)
@@ -123,8 +124,6 @@ def train_epoch(model, train_iter, optimizer):
                              tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
 
         # loss
-        optimizer.zero_grad()
-
         loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
         loss.backward()
 
@@ -145,7 +144,7 @@ def evaluate(model, val_iter):
 
         seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
             DEVICE).bool()
-        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=0)
+        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
         angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
         # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
@@ -163,7 +162,6 @@ def evaluate(model, val_iter):
         # loss
 
         loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
-        loss.backward()
 
         losses += loss.item()
     return losses / len(val_iter)
@@ -174,7 +172,7 @@ def evaluate(model, val_iter):
 raw_data = scn.load(
     casp_version=12,
     thinning=30,
-    batch_size=1,
+    batch_size=100,
     dynamic_batching=False
 )
 
@@ -187,7 +185,7 @@ for split in scn.utils.download.VALID_SPLITS:
 data = prepare_dataloaders(
     filtered_raw_data,
     aggregate_model_input=True,
-    batch_size=1,
+    batch_size=100,
     num_workers=4,
     seq_as_onehot=None,
     collate_fn=None,
@@ -205,7 +203,8 @@ dl = iter(data['train'])
 #     dim_head=64
 # ).to(DEVICE)
 
-SRC_VOCAB_SIZE = 21  # number of amino acids
+#
+SRC_VOCAB_SIZE = 22  # number of amino acids + padding 21
 TGT_VOCAB_SIZE = 3  # backbone torsion angle
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
@@ -230,6 +229,7 @@ optimizer = torch.optim.Adam(
     transformer.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9
 )
 
+# todo checkpoint routine
 # training loop
 for epoch in range(1, NUM_EPOCHS + 1):
     start_time = time.time()
@@ -245,6 +245,12 @@ for epoch in range(1, NUM_EPOCHS + 1):
     writer_train.flush()
     print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Val loss: {val_loss:.3f}, "
            f"Epoch time = {(end_time - start_time):.3f}s"))
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': transformer.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': train_loss,
+    }, "model.pt")
 print('train ended')
 writer_train.close()
 valid_count = 0

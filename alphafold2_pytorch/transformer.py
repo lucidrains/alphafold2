@@ -38,6 +38,7 @@ class Seq2SeqTransformer(nn.Module):
         self.src_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
 
+    # todo make mask work
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
