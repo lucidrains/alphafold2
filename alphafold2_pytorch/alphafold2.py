@@ -226,6 +226,17 @@ class InterceptAttention(nn.Module):
 
 # feed forward
 
+class DepthWiseConv2d(nn.Module):
+    def __init__(self, dim_in, dim_out, kernel_size, padding = 0, stride = 1, bias = True, groups = None):
+        super().__init__()
+        groups = default(groups, dim_in)
+        self.net = nn.Sequential(
+            nn.Conv2d(dim_in, dim_in, kernel_size = kernel_size, padding = padding, groups = groups, stride = stride, bias = bias),
+            nn.Conv2d(dim_in, dim_out, 1, bias = bias)
+        )
+    def forward(self, x):
+        return self.net(x)
+
 class GEGLU(nn.Module):
     def forward(self, x):
         x, gates = x.chunk(2, dim = -1)
@@ -248,6 +259,30 @@ class FeedForward(nn.Module):
 
     def forward(self, x, **kwargs):
         return self.net(x)
+
+class LocalFeedForward(nn.Module):
+    def __init__(
+        self,
+        dim,
+        hidden_dim,
+        dropout = 0.,
+        kernel_size = 3
+    ):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(dim, hidden_dim, 1),
+            nn.GELU(),
+            DepthWiseConv2d(hidden_dim, hidden_dim, kernel_size, padding = kernel_size // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Conv2d(hidden_dim, dim, 1)
+        )
+    def forward(self, x):
+        h = w = int(sqrt(x.shape[-2]))
+        x = rearrange(x, 'b (h w) c -> b c h w', h = h, w = w)
+        x = self.net(x)
+        x = rearrange(x, 'b c h w -> b (h w) c')
+        return x
 
 # attention
 
@@ -800,7 +835,7 @@ class Alphafold2(nn.Module):
 
             layers.append(nn.ModuleList([
                 prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True))),
-                prenorm(InterceptFeedForward(tensor_slice, ff = FeedForward(dim = dim, dropout = ff_dropout))),
+                prenorm(InterceptFeedForward(tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
