@@ -131,6 +131,7 @@ class InterceptFeedForward(nn.Module):
         x = x.view(shape)
         output = torch.zeros_like(x)
         x = x[slice_tuple]
+
         output_subset_shape = x.shape
         x = rearrange(x, 'b ... d -> b (...) d')
 
@@ -821,6 +822,8 @@ class Alphafold2(nn.Module):
 
             # self attention, for main sequence, msa, and optionally, templates
 
+            ff_tensor_slice = (slice(None), slice(0, 1))
+
             if attn_type == 'full':
                 tensor_slice = None
                 template_axial_attn = True
@@ -835,7 +838,7 @@ class Alphafold2(nn.Module):
 
             layers.append(nn.ModuleList([
                 prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True))),
-                prenorm(InterceptFeedForward(tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
@@ -851,9 +854,9 @@ class Alphafold2(nn.Module):
 
             layers.append(nn.ModuleList([
                 intercept_fn(context = False, attn = prenorm_cross(cross_attn_fn())),
-                prenorm(LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
+                prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
             ]))
 
         if not reversible:
