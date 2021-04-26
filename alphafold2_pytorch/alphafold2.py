@@ -297,7 +297,7 @@ class Attention(nn.Module):
         compress_ratio = 1,
         tie_attn_dim = None,
         rotary_rpe = False,
-        rotary_conv_q_kernel = 15
+        rotary_conv_q_kernel = 7
     ):
         super().__init__()
         inner_dim = dim_head * heads
