@@ -851,7 +851,7 @@ class Alphafold2(nn.Module):
 
             layers.append(nn.ModuleList([
                 intercept_fn(context = False, attn = prenorm_cross(cross_attn_fn())),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                prenorm(LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout)),
                 intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
