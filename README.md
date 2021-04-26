@@ -12,6 +12,14 @@ Once this is replicated, I intend to fold all available amino acid sequences out
 $ pip install alphafold2-pytorch
 ```
 
+## Status
+
+<a href="https://github.com/lhatsk">lhatsk</a> has reported training a modified trunk of this repository, using the same setup as trRosetta, with competitive results
+
+<img src="./images/axial_attention_vs_trrosetta.jpg" width="400px"></img>
+
+`blue used the the trRosetta input (MSA -> potts -> axial attention), green used the ESM embedding (only sequence) -> tiling -> axial attention` - lhatsk
+
 ## Usage
 
 Predicting distogram, like Alphafold-1, but with attention
@@ -111,6 +119,64 @@ coords = model(
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
 
+## MSA or ESM Embeddings
+
+This repository offers you an easy supplement the network with pre-trained embeddings from <a href="https://github.com/facebookresearch/esm">Facebook AI</a>. It contains wrappers for the pre-trained <a href="https://www.biorxiv.org/content/10.1101/622803v1.full">ESM</a> or <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">MSA Transformers</a>.
+
+There are some prerequisites. You will need to make sure that you have Nvidia's <a href="https://github.com/NVIDIA/apex#linux">apex</a> library installed, as the pretrained transformers make use of some fused operations.
+
+Or you can try running the script below
+
+```bash
+git clone https://github.com/NVIDIA/apex
+cd apex
+pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
+```
+
+Next, you will simply have to import and wrap your `Alphafold2` instance with a `ESMEmbedWrapper` or `MSAEmbedWrapper` and it will take care of embedding both the sequence and the multiple-sequence alignments for you (and projecting it to the dimensions as specified on your model). Nothing needs to be changed save for adding the wrapper.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+from alphafold2_pytorch.embeds import MSAEmbedWrapper
+
+alphafold2 = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64
+)
+
+model = MSAEmbedWrapper(
+    alphafold2 = alphafold2
+).cuda()
+
+seq = torch.randint(0, 21, (2, 16)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+
+msa = torch.randint(0, 21, (2, 5, 16)).cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+)
+```
+
+By default, even if the wrapper supplies the trunk with the sequence and MSA embeddings, they would be summed with the usual token embeddings. If you want to train Alphafold2 without token embeddings (only rely on pretrained embeddings), you would need to set `disable_token_embed` to `True` on `Alphafold2` init.
+
+```python
+alphafold2 = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    disable_token_embed = True
+)
+```
+
 ## Real-Value Distance Prediction
 
 A <a href="https://www.biorxiv.org/content/10.1101/2020.11.26.400523v1.full.pdf">paper</a> by Jinbo Xu suggests that one doesn't need to bin the distances, and can instead predict the mean and standard deviation directly. You can use this by turning on one flag `predict_real_value_distances`, in which case, the distance prediction returned will have a dimension of `2` for the mean and standard deviation respectively.
@@ -178,6 +244,38 @@ model = Alphafold2(
     dim_head = 64,
     max_seq_len = 2048,                   # the maximum sequence length, this is required for sparse attention. the input cannot exceed what is set here
     sparse_self_attn = (True, False) * 6  # interleave sparse and full attention for all 12 layers
+).cuda()
+```
+
+## Linear Attention
+
+I have also added one of the best <a href="https://github.com/lucidrains/performer-pytorch">linear attention</a> variants, in the hope of lessening the burden of cross attending. I personally have not found Performer to work that well, but since in the paper they reported some ok numbers for protein benchmarks, I thought I'd include it and allow others to experiment.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_linear = True # simply set this to True to use Performer for all cross attention
+).cuda()
+```
+
+You can also specify the exact layers you wish to use linear attention by passing in a tuple of the same length as the depth
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 6,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_linear = (True, False) * 3 # interleave linear and full attention
 ).cuda()
 ```
 
@@ -367,6 +465,17 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     year    = {2021},
     publisher = {Cold Spring Harbor Laboratory},
     URL     = {https://www.biorxiv.org/content/early/2021/02/13/2021.02.12.430858},
+    journal = {bioRxiv}
+}
+```
+
+```bibtex
+@article {Rives622803,
+    author  = {Rives, Alexander and Goyal, Siddharth and Meier, Joshua and Guo, Demi and Ott, Myle and Zitnick, C. Lawrence and Ma, Jerry and Fergus, Rob},
+    title   = {Biological Structure and Function Emerge from Scaling Unsupervised Learning to 250 Million Protein Sequences},
+    year    = {2019},
+    doi     = {10.1101/622803},
+    publisher = {Cold Spring Harbor Laboratory},
     journal = {bioRxiv}
 }
 ```
