@@ -13,10 +13,11 @@ def rotate_every_two(x):
     return rearrange(x, '... d j -> ... (d j)')
 
 def apply_rotary_pos_emb(x, sinu_pos):
-    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
-    sin, cos = sinu_pos.unbind(dim = -2)
-    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
-    return x * cos + rotate_every_two(x) * sin
+    sin, cos = map(lambda t: rearrange(t, 'b ... -> b () ...'), sinu_pos)
+    rot_dim = sin.shape[-1]
+    x, x_pass = x[..., :rot_dim], x[..., rot_dim:]
+    x =  x * cos + rotate_every_two(x) * sin
+    return torch.cat((x, x_pass), dim = -1)
 
 # positional embeddings
 
@@ -38,15 +39,15 @@ class FixedPositionalEmbedding(nn.Module):
         self.register_buffer('inv_freq', inv_freq)
 
     def forward(self, n, device):
-        t = torch.arange(n, device = device).type_as(self.inv_freq)
-        sinusoid_inp = einsum('i , j -> i j', t, self.inv_freq)
-        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
-        return rearrange(emb, 'i j -> () i j')
+        seq = torch.arange(n, device = device).type_as(self.inv_freq)
+        freqs = einsum('i , j -> i j', seq, self.inv_freq)
+        freqs = repeat(freqs, 'i j -> () i (j r)', r = 2)
+        return [freqs.sin(), freqs.cos()]
 
 class AxialRotaryEmbedding(nn.Module):
     def __init__(self, dim, max_freq = 10):
         super().__init__()
-        self.dim = dim // 4
+        self.dim = dim // 2
         inv_freq = 1. / (10000 ** (torch.arange(0, self.dim, 2).float() / self.dim))
         self.register_buffer('inv_freq', inv_freq)
 
@@ -62,6 +63,5 @@ class AxialRotaryEmbedding(nn.Module):
         sin = torch.cat((x_sinu.sin(), y_sinu.sin()), dim = -1)
         cos = torch.cat((x_sinu.cos(), y_sinu.cos()), dim = -1)
 
-        sin, cos = map(lambda t: rearrange(t, 'i j d -> (i j) d'), (sin, cos))
-        sin, cos = map(lambda t: repeat(t, 'n d -> () n (d j)', j = 2), (sin, cos))
-        return sin, cos
+        sin, cos = map(lambda t: repeat(t, 'i j d -> () (i j) (d r)', r = 2), (sin, cos))
+        return [sin, cos]

@@ -317,7 +317,7 @@ class Attention(nn.Module):
 
         # rotary relative positional encoding
 
-        if exists(rotary_emb) and not has_context:
+        if exists(rotary_emb):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
@@ -397,7 +397,7 @@ class LinearAttention(Attention):
 
         # rotary relative positional encoding
 
-        if exists(rotary_emb) and not has_context:
+        if exists(rotary_emb):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
@@ -462,7 +462,7 @@ class SparseAttention(Attention):
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        if exists(rotary_emb) and not has_context:
+        if exists(rotary_emb):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
@@ -1079,7 +1079,8 @@ class Alphafold2(nn.Module):
         if not self.disable_cross_attn_rotary:
             cross_seq_pos_emb = self.cross_attn_seq_rotary_emb(n, device = device)
             cross_msa_pos_emb = self.cross_attn_msa_rotary_emb(msa_seq_len, device = device)
-            cross_msa_pos_emb = repeat(cross_msa_pos_emb, 'b n d -> b (m n) d', m = num_msa)
+
+            cross_msa_pos_emb = list(map(lambda t: repeat(t, 'b n d -> b (m n) (r d)', m = num_msa, r = 2), cross_msa_pos_emb))
 
             seq_to_msa_pos_emb = (cross_seq_pos_emb, cross_msa_pos_emb)
             msa_to_seq_pos_emb = (cross_msa_pos_emb, cross_seq_pos_emb)
