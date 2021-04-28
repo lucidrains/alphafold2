@@ -1213,6 +1213,7 @@ class Alphafold2(nn.Module):
 
         # derive global features
 
+        structure_kwargs = {}
         pooled_feats = None
         if self.structure_num_global_nodes > 0:
             pooled_feats = repeat(self.global_queries, 'n d -> b n d', b = b)
@@ -1222,6 +1223,7 @@ class Alphafold2(nn.Module):
                 pooled_feats = attn(pooled_feats, context = to_pool, context_mask = x_mask) + pooled_feats
 
             pooled_feats = pooled_feats.double()
+            structure_kwargs = {'global_feats': pooled_feats}
 
         # /adjacency mat calc - above should be pre-calculated and cached in a buffer
 
@@ -1233,7 +1235,7 @@ class Alphafold2(nn.Module):
                     mask = flat_chain_mask,
                     adj_mat = adj_mat,
                     edges = edges,
-                    global_feats = pooled_feats
+                    **structure_kwargs
                 )
 
         coords.type(original_dtype)
