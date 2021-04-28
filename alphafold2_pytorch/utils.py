@@ -474,8 +474,8 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
     # not needed to device since it's only for indices.
     scaff = torch.zeros(seqs.shape[1], 14)
     scaff[:, 0] = 1
-    idxs = torch.nonzero(scaff.view(-1), as_tuple=True)[0]
-    
+    idxs = torch.nonzero(scaff).reshape(-1)
+
     for s,seq in enumerate(seqs): 
         for i,idx in enumerate(idxs):
             if i >= seq.shape[0]:

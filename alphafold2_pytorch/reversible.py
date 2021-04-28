@@ -65,7 +65,7 @@ class ReversibleSelfAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)        
 
-    def forward(self, x, m, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, _reverse = True):
+    def forward(self, x, m, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, seq_pos_emb = None, msa_pos_emb = None, _reverse = True, **kwargs):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -74,14 +74,14 @@ class ReversibleSelfAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, shape = seq_shape, record_rng = record_rng, mask = mask)
+            y1 = x1 + self.f(x2, shape = seq_shape, record_rng = record_rng, mask = mask, rotary_emb = seq_pos_emb)
             y2 = x2 + self.g(y1, shape = seq_shape, record_rng = record_rng)
-            n1 = m1 + self.j(m2, shape = msa_shape, record_rng = record_rng, mask = msa_mask)
+            n1 = m1 + self.j(m2, shape = msa_shape, record_rng = record_rng, mask = msa_mask, rotary_emb = msa_pos_emb)
             n2 = m2 + self.k(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, seq_shape = None, msa_shape = None):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, seq_pos_emb = None, msa_pos_emb = None, **kwargs):
         y1, y2 = torch.chunk(y, 2, dim = 2)
         del y
 
@@ -103,7 +103,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             x2.requires_grad = True
-            fx2 = self.f(x2, shape = seq_shape, set_rng = True, mask = mask)
+            fx2 = self.f(x2, shape = seq_shape, set_rng = True, mask = mask, rotary_emb = seq_pos_emb)
             torch.autograd.backward(fx2, dx1, retain_graph = True)
 
         with torch.no_grad():
@@ -138,7 +138,7 @@ class ReversibleSelfAttnBlock(nn.Module):
 
         with torch.enable_grad():
             m2.requires_grad = True
-            fm2 = self.j(m2, shape = msa_shape, set_rng = True, mask = msa_mask)
+            fm2 = self.j(m2, shape = msa_shape, set_rng = True, mask = msa_mask, rotary_emb = msa_pos_emb)
             torch.autograd.backward(fm2, dm1, retain_graph=True)
 
         with torch.no_grad():
@@ -164,7 +164,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         self.j = Deterministic(j)
         self.k = Deterministic(k)
 
-    def forward(self, x, m, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, _reverse = True, **kwargs):
+    def forward(self, x, m, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, seq_to_msa_pos_emb = None, msa_to_seq_pos_emb = None, _reverse = True, **kwargs):
         x1, x2 = torch.chunk(x, 2, dim = 2)
         m1, m2 = torch.chunk(m, 2, dim = 2)
         y1, y2, n1, n2 = None, None, None, None
@@ -173,14 +173,14 @@ class ReversibleCrossAttnBlock(nn.Module):
         record_rng = self.training and _reverse
 
         with context():
-            y1 = x1 + self.f(x2, m2, record_rng = record_rng, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape)
-            y2 = x2 + self.g(y1, record_rng = record_rng)
-            n1 = m1 + self.j(m2, y2, record_rng = record_rng, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape)
-            n2 = m2 + self.k(n1, record_rng = record_rng)
+            y1 = x1 + self.f(x2, m2, record_rng = record_rng, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape, rotary_emb = seq_to_msa_pos_emb)
+            y2 = x2 + self.k(y1, shape = seq_shape, record_rng = record_rng)
+            n1 = m1 + self.j(m2, y2, record_rng = record_rng, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape, rotary_emb = msa_to_seq_pos_emb)
+            n2 = m2 + self.g(n1, record_rng = record_rng)
 
         return torch.cat((y1, y2), dim = 2), torch.cat((n1, n2), dim = 2)
 
-    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, **kwargs):
+    def backward_pass(self, y, n, dy, dn, mask = None, msa_mask = None, seq_shape = None, msa_shape = None, seq_to_msa_pos_emb = None, msa_to_seq_pos_emb = None, **kwargs):
         n1, n2 = torch.chunk(n, 2, dim = 2)
         del n
 
@@ -195,7 +195,7 @@ class ReversibleCrossAttnBlock(nn.Module):
 
         with torch.enable_grad():
             n1.requires_grad = True
-            gn1 = self.k(n1, set_rng = True)
+            gn1 = self.g(n1, set_rng = True)
             torch.autograd.backward(gn1, dn2)
 
         with torch.no_grad():
@@ -209,7 +209,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             m2.requires_grad = True
             y2.requires_grad = True
-            fm2 = self.j(m2, y2, set_rng=True, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape)
+            fm2 = self.j(m2, y2, set_rng=True, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape, rotary_emb = msa_to_seq_pos_emb)
             torch.autograd.backward(fm2, dm1)
 
         with torch.no_grad():
@@ -225,7 +225,7 @@ class ReversibleCrossAttnBlock(nn.Module):
 
         with torch.enable_grad():
             y1.requires_grad = True
-            gy1 = self.g(y1, set_rng = True)
+            gy1 = self.k(y1, shape = seq_shape, set_rng = True)
             torch.autograd.backward(gy1, dx2)
 
         with torch.no_grad():
@@ -239,7 +239,7 @@ class ReversibleCrossAttnBlock(nn.Module):
         with torch.enable_grad():
             x2.requires_grad = True
             m2.requires_grad = True
-            fx2 = self.f(x2, m2, set_rng = True, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape)
+            fx2 = self.f(x2, m2, set_rng = True, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape, rotary_emb = seq_to_msa_pos_emb)
             torch.autograd.backward(fx2, dx1)
 
         with torch.no_grad():
@@ -311,12 +311,25 @@ class ReversibleSequence(nn.Module):
 
         self.blocks = blocks
 
-    def forward(self, seq, msa, seq_shape = None, msa_shape = None, mask = None, msa_mask = None, reverse = True):
+    def forward(
+        self,
+        seq,
+        msa,
+        seq_shape = None,
+        msa_shape = None,
+        mask = None,
+        msa_mask = None,
+        seq_pos_emb = None,
+        msa_pos_emb = None,
+        seq_to_msa_pos_emb = None,
+        msa_to_seq_pos_emb = None,
+        reverse = True
+    ):
         assert exists(msa), 'reversibility does not work with no MSA sequences yet'
         
         blocks = self.blocks
         seq, msa = list(map(lambda t: torch.cat((t, t), dim = -1), (seq, msa)))
-        kwargs = {'mask': mask, 'msa_mask': msa_mask, 'seq_shape': seq_shape, 'msa_shape': msa_shape}
+        kwargs = {'mask': mask, 'msa_mask': msa_mask, 'seq_shape': seq_shape, 'msa_shape': msa_shape, 'seq_pos_emb': seq_pos_emb, 'msa_pos_emb': msa_pos_emb, 'seq_to_msa_pos_emb': seq_to_msa_pos_emb, 'msa_to_seq_pos_emb': msa_to_seq_pos_emb}
 
         fn = reversible_apply if reverse else irreversible_apply
         ind = seq.shape[1]

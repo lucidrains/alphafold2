@@ -103,7 +103,8 @@ model = Alphafold2(
     structure_module_depth = 1,             # depth
     structure_module_heads = 1,             # heads
     structure_module_dim_head = 16,         # dimension of heads
-    structure_module_refinement_iters = 2   # number of equivariant coordinate refinement iterations
+    structure_module_refinement_iters = 2,  # number of equivariant coordinate refinement iterations
+    structure_num_global_nodes = 1          # number of global nodes for the structure module, only works with SE3 transformer
 ).cuda()
 
 seq = torch.randint(0, 21, (2, 64)).cuda()
@@ -532,5 +533,16 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     eprint  = {2102.09844},
     archivePrefix = {arXiv},
     primaryClass = {cs.LG}
+}
+```
+
+```bibtex
+@misc{su2021roformer,
+    title   = {RoFormer: Enhanced Transformer with Rotary Position Embedding},
+    author  = {Jianlin Su and Yu Lu and Shengfeng Pan and Bo Wen and Yunfeng Liu},
+    year    = {2021},
+    eprint  = {2104.09864},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CL}
 }
 ```
