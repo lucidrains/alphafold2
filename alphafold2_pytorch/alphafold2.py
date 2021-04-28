@@ -615,8 +615,8 @@ class SE3TransformerWrapper(nn.Module):
         self.net = SE3Transformer(*args, **kwargs)
         self.to_refined_coords_delta = nn.Linear(kwargs['dim'], 1)
 
-    def forward(self, x, coords, mask = None, adj_mat = None, edges = None):
-        output = self.net(x, coords, mask = mask, adj_mat = adj_mat, edges = edges)
+    def forward(self, x, coords, mask = None, adj_mat = None, edges = None, global_feats = None):
+        output = self.net(x, coords, mask = mask, adj_mat = adj_mat, edges = edges, global_feats = global_feats)
         x, refined_coords = output['0'], output['1']
 
         refined_coords = rearrange(refined_coords, 'b n d c -> b n c d')
@@ -711,7 +711,8 @@ class Alphafold2(nn.Module):
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
         disable_token_embed = False,
-        disable_cross_attn_rotary = False
+        disable_cross_attn_rotary = False,
+        structure_num_global_nodes = 0
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
@@ -869,6 +870,19 @@ class Alphafold2(nn.Module):
             nn.Linear(dim, dim_distance_pred)
         )
 
+        # global node tokens for se3 structure module
+
+        global_feats_dim = None
+
+        self.global_pool_attns = nn.ModuleList([])
+        self.structure_num_global_nodes = structure_num_global_nodes
+
+        if structure_num_global_nodes > 0:
+            assert use_se3_transformer, 'se3 transformer must be used in order to use global node token feature'
+            self.global_queries = nn.Parameter(torch.randn(structure_num_global_nodes, dim))
+            self.global_pool_attns.append(Attention(dim = dim))
+            global_feats_dim = dim
+
         # to coordinate output
 
         self.predict_coords = predict_coords
@@ -901,6 +915,7 @@ class Alphafold2(nn.Module):
                     edge_dim = edge_dim,
                     num_adj_degrees = structure_module_adj_neighbors,
                     adj_dim = 4,
+                    global_feats_dim = global_feats_dim
                 )
             else:
                 self.structure_module = EnTransformer(
@@ -951,7 +966,7 @@ class Alphafold2(nn.Module):
 
         # variables
 
-        n, device = seq.shape[1], seq.device
+        b, n, device = *seq.shape[:2], seq.device
         n_range = torch.arange(n, device = device)
 
         # unpack (AA_code, atom_pos)
@@ -1196,6 +1211,18 @@ class Alphafold2(nn.Module):
         adj_idxs, adj_num = prot_covalent_bond(seq, adj_degree=1, cloud_mask=cloud_mask)
         adj_mat = adj_num.bool()
 
+        # derive global features
+
+        pooled_feats = None
+        if self.structure_num_global_nodes > 0:
+            pooled_feats = repeat(self.global_queries, 'n d -> b n d', b = b)
+            to_pool = rearrange(trunk_embeds, 'b ... d -> b (...) d')
+
+            for attn in self.global_pool_attns:
+                pooled_feats = attn(pooled_feats, context = to_pool, context_mask = x_mask) + pooled_feats
+
+            pooled_feats = pooled_feats.double()
+
         # /adjacency mat calc - above should be pre-calculated and cached in a buffer
 
         with torch_default_dtype(torch.float64):
@@ -1205,7 +1232,8 @@ class Alphafold2(nn.Module):
                     coords,
                     mask = flat_chain_mask,
                     adj_mat = adj_mat,
-                    edges = edges
+                    edges = edges,
+                    global_feats = pooled_feats
                 )
 
         coords.type(original_dtype)

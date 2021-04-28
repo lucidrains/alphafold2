@@ -475,14 +475,14 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
     adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
     scaff = torch.zeros_like(cloud_mask[0])
     scaff[:, 0] = 1
-    idxs = torch.nonzero(scaff).view(-1)
+    idxs = torch.nonzero(scaff).reshape(-1)
 
     for s,seq in enumerate(seqs): 
         for i,idx in enumerate(idxs):
             if i >= seq.shape[0]:
                 break
             # offset by pos in chain ( intra-aa bonds + with next aa )
-            bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] ).t()
+            bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] , device = device).t()
             # delete link with next if not final
             if i == idxs.shape[0]-1:
                 bonds = bonds[:, :-1]
