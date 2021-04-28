@@ -674,7 +674,9 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
     # iterative updates:
     for i in range(iters):
         # compute distance matrix of coords and stress
+        best_3d_coords = best_3d_coords.contiguous()
         dist_mat = torch.cdist(best_3d_coords, best_3d_coords, p=2).clone()
+
         stress   = ( weights * (dist_mat - pre_dist_mat)**2 ).sum(dim=(-1,-2)) * 0.5
         # perturb - update X using the Guttman transform - sklearn-like
         dist_mat[ dist_mat <= 0 ] += 1e-7
