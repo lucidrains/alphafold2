@@ -277,8 +277,9 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     """
     # use MSA transformer
     REPR_LAYER_NUM = 12
+    device = embedd_model.device
     max_seq_len = msa.shape[-1]
-    embedd_inputs = ids_to_embed_input(msa.tolist())
+    embedd_inputs = ids_to_embed_input(msa.cpu().tolist())
 
     msa_batch_labels, msa_batch_strs, msa_batch_tokens = batch_converter(embedd_inputs)
     with torch.no_grad():
@@ -299,9 +300,10 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
             * embedd_dim: number of embedding dimensions. 1280 for ESM-1b
     """
     # use ESM transformer
+    device = embedd_model.device
     REPR_LAYER_NUM = 33
     max_seq_len = seq.shape[-1]
-    embedd_inputs = ids_to_embed_input(seq.tolist())
+    embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
 
     batch_labels, batch_strs, batch_tokens = batch_converter(embedd_inputs)
     with torch.no_grad():
@@ -362,10 +364,10 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     # do loop in cpu
     device = scn_seq.device
     batch_mask = []
-    scn_seq = scn_seq.cpu()
+    scn_seq = scn_seq.cpu().tolist()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa.item())]['cloud_mask'] \
+        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa)]['cloud_mask'] \
                                          for aa in seq]).bool().to(device).unsqueeze(0) )
     # concat in last dim
     batch_mask = torch.cat(batch_mask, dim=0)
@@ -385,11 +387,11 @@ def scn_backbone_mask(scn_seq, boolean=True, n_aa=3):
         * bool: whether to return as array of idxs or boolean values
         Outputs: (N_mask, CA_mask, C_mask)
     """
-    wrapper = torch.zeros(*scn_seq.shape, n_aa)
+    wrapper = torch.zeros(*scn_seq.shape, n_aa).to(scn_seq.device)
     # N is the first atom in every AA. CA is the 2nd.
-    wrapper[:, 0] = 1
-    wrapper[:, 1] = 2
-    wrapper[:, 2] = 3
+    wrapper[..., 0] = 1
+    wrapper[..., 1] = 2
+    wrapper[..., 2] = 3
     wrapper = rearrange(wrapper, '... l c -> ... (l c)')
     # find idxs
     N_mask  = wrapper == 1
@@ -466,24 +468,21 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
                for indexes, only 1 seq is supported 
         Outputs: edge_idxs, edge_attrs
     """
-    # create or infer cloud_mask
-    if cloud_mask is None: 
-        cloud_mask = scn_cloud_mask(seq).bool()
-
-    device, precise = cloud_mask.device, cloud_mask.type()
+    device = seqs.device
     # get starting poses for every aa
     adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
-    scaff = torch.zeros_like(cloud_mask[0])
+    # not needed to device since it's only for indices.
+    scaff = torch.zeros(seqs.shape[1], 14)
     scaff[:, 0] = 1
-    idxs = torch.nonzero(scaff).view(-1)
-
+    idxs = torch.nonzero(scaff.view(-1), as_tuple=True)[0]
+    
     for s,seq in enumerate(seqs): 
         for i,idx in enumerate(idxs):
             if i >= seq.shape[0]:
                 break
             # offset by pos in chain ( intra-aa bonds + with next aa )
             bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] ).t()
-            # delete link with next if not final
+            # delete link with next if final AA in seq
             if i == idxs.shape[0]-1:
                 bonds = bonds[:, :-1]
             # modify adj mat
@@ -630,6 +629,7 @@ def center_distogram_torch(distogram, bins=DISTANCE_THRESHOLDS, min_t=1., center
     weights[weights != weights] *= 0.
     weights[:, diag_idxs, diag_idxs] *= 0.
     return central, weights
+
 
 # distance matrix to 3d coords: https://github.com/scikit-learn/scikit-learn/blob/42aff4e2e/sklearn/manifold/_mds.py#L279
 
@@ -922,7 +922,7 @@ def kabsch_numpy(X, Y):
 
 # metrics - more formulas here: http://predictioncenter.org/casp12/doc/help.html
 
-def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, distmat_mask=None):
+def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=None, distmat_mask=None):
     """ Calculates a loss on the distance matrix - no need to align structs.
         Inputs: 
         * X: (N, d) tensor. the predicted structure. One of (X, X_mat) is needed.
@@ -931,6 +931,8 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, distmat
         * Y_mat: (N, N) tensor. the predicted distance matrix. Optional ()
         * p: int. power for the distance calculation (2 for euclidean)
         * q: float. power for the scaling of the loss (2 for MSE, 1 for MAE, etc)
+        * custom: func or None. custom loss over distance matrices. 
+                  ex: lambda x,y: 1 - 1/ (1 + ((x-y))**2) (1 is very bad. 0 is good)
         * distmat_mask: (N, N) mask (boolean or weights for each ij pos). optional.
     """
     assert (X is not None or X_mat is not None) and \
@@ -942,11 +944,16 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, distmat
         Y_mat = torch.cdist(Y, Y, p=p)
     if distmat_mask is None:
         distmat_mask = torch.ones_like(Y_mat).bool()
+
+    # do custom expression if passed
+    if custom is not None:
+        loss = custom(X_mat, Y_mat).mean()
     # **2 ensures always positive. Later scale back to desired power
-    loss = ( X_mat - Y_mat )**2 
-    if q != 2:
-        loss = loss**(q/2)
-    return loss[distmat_mask].mean()
+    else:
+        loss = ( X_mat - Y_mat )**2 
+        if q != 2:
+            loss = loss**(q/2)
+        return loss[distmat_mask].mean()
 
 def rmsd_torch(X, Y):
     """ Assumes x,y are both (B x D x N). See below for wrapper. """

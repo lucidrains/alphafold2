@@ -866,37 +866,38 @@ class Alphafold2(nn.Module):
 
         self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
 
-        with torch_default_dtype(torch.float64):
-            self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
-            self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
+        if self.predict_coords:
+            with torch_default_dtype(torch.float64):
+                self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
+                self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
 
-            if use_se3_transformer:
-                self.structure_module = SE3TransformerWrapper(
-                    dim = structure_module_dim,
-                    depth = structure_module_depth,
-                    input_degrees = 1,
-                    num_degrees = 3,
-                    output_degrees = 2,
-                    heads = structure_module_heads,
-                    differentiable_coors = True,
-                    num_neighbors = 0, # use only bonded neighbors for now
-                    attend_sparse_neighbors = True,
-                    edge_dim = edge_dim,
-                    num_adj_degrees = structure_module_adj_neighbors,
-                    adj_dim = 4,
-                )
-            else:
-                self.structure_module = EnTransformer(
-                    dim = structure_module_dim,
-                    depth = structure_module_depth,
-                    heads = structure_module_heads,
-                    fourier_features = 2,
-                    num_nearest_neighbors = 0,
-                    only_sparse_neighbors = True,
-                    edge_dim = edge_dim,
-                    num_adj_degrees = structure_module_adj_neighbors,
-                    adj_dim = 4
-                )
+                if use_se3_transformer:
+                    self.structure_module = SE3TransformerWrapper(
+                        dim = structure_module_dim,
+                        depth = structure_module_depth,
+                        input_degrees = 1,
+                        num_degrees = 3,
+                        output_degrees = 2,
+                        heads = structure_module_heads,
+                        differentiable_coors = True,
+                        num_neighbors = 0, # use only bonded neighbors for now
+                        attend_sparse_neighbors = True,
+                        edge_dim = edge_dim,
+                        num_adj_degrees = structure_module_adj_neighbors,
+                        adj_dim = 4,
+                    )
+                else:
+                    self.structure_module = EnTransformer(
+                        dim = structure_module_dim,
+                        depth = structure_module_depth,
+                        heads = structure_module_heads,
+                        fourier_features = 2,
+                        num_nearest_neighbors = 0,
+                        only_sparse_neighbors = True,
+                        edge_dim = edge_dim,
+                        num_adj_degrees = structure_module_adj_neighbors,
+                        adj_dim = 4
+                    )
 
         # aux confidence measure
         self.lddt_linear = nn.Linear(structure_module_dim, 1)
