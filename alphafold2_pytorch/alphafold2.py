@@ -702,11 +702,11 @@ class Alphafold2(nn.Module):
         mds_iters = 5,
         use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
-        structure_module_depth = 4,
+        structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 4,
         structure_module_refinement_iters = 2,
-        structure_module_knn = 0,
+        structure_module_knn = 2,
         structure_module_adj_neighbors = 2,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
