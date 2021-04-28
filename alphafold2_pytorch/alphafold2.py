@@ -13,12 +13,14 @@ from einops.layers.torch import Rearrange
 import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.utils import *
 from alphafold2_pytorch.reversible import ReversibleSequence
+from alphafold2_pytorch.rotary import DepthWiseConv1d, AxialRotaryEmbedding, FixedPositionalEmbedding, apply_rotary_pos_emb
 
 # structure module
 
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
+
 from performer_pytorch import FastAttention, ProjectionUpdater
 
 # constants
@@ -37,44 +39,6 @@ def default(val, d):
 
 def cast_tuple(val, depth):
     return val if isinstance(val, tuple) else (val,) * depth
-
-# positional embeddings
-
-class DepthWiseConv1d(nn.Module):
-    def __init__(self, dim_in, dim_out, kernel_size, padding = 0, stride = 1, bias = True, groups = None):
-        super().__init__()
-        groups = default(groups, dim_in)
-        self.net = nn.Sequential(
-            nn.Conv1d(dim_in, dim_in, kernel_size = kernel_size, padding = padding, groups = groups, stride = stride, bias = bias),
-            nn.Conv1d(dim_in, dim_out, 1, bias = bias)
-        )
-    def forward(self, x):
-        return self.net(x)
-
-class FixedPositionalEmbedding(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer('inv_freq', inv_freq)
-
-    def forward(self, x):
-        t = torch.arange(x.shape[-2], device = x.device).type_as(self.inv_freq)
-        sinusoid_inp = einsum('i , j -> i j', t, self.inv_freq)
-        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
-        return rearrange(emb, 'i j -> () i j')
-
-def rotate_every_two(x):
-    x = rearrange(x, '... (d j) -> ... d j', j = 2)
-    x1, x2 = x.unbind(dim = -1)
-    x = torch.stack((-x2, x1), dim = -1)
-    return rearrange(x, '... d j -> ... (d j)')
-
-def apply_rotary_pos_emb(q, k, sinu_pos):
-    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
-    sin, cos = sinu_pos.unbind(dim = -2)
-    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
-    q, k = map(lambda t: (t * cos) + (rotate_every_two(t) * sin), (q, k))
-    return q, k
 
 # helper classes
 
@@ -296,9 +260,7 @@ class Attention(nn.Module):
         dim_head = 64,
         dropout = 0.,
         compress_ratio = 1,
-        tie_attn_dim = None,
-        rotary_rpe = False,
-        rotary_conv_q_kernel = 7
+        tie_attn_dim = None
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -306,15 +268,7 @@ class Attention(nn.Module):
         self.heads= heads
         self.scale = dim_head ** -0.5
 
-        if rotary_rpe:
-            self.to_q = nn.Sequential(
-                Rearrange('b n d -> b d n'),
-                DepthWiseConv1d(dim, inner_dim, rotary_conv_q_kernel, padding = (rotary_conv_q_kernel // 2)),
-                Rearrange('b d n -> b n d')
-            )
-        else:
-            self.to_q = nn.Linear(dim, inner_dim, bias = False)
-
+        self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim)
 
@@ -326,14 +280,7 @@ class Attention(nn.Module):
 
         self.tie_attn_dim = tie_attn_dim
 
-        self.rotary_sinu_emb = FixedPositionalEmbedding(dim_head) if rotary_rpe else None
-
-    def apply_rpe(self, q, k):
-        sinu_emb = self.rotary_sinu_emb(q)
-        q, k = apply_rotary_pos_emb(q, k, sinu_emb)
-        return q, k
-
-    def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, **kwargs):
+    def forward(self, x, context = None, mask = None, context_mask = None, tie_attn_dim = None, rotary_emb = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
         context = default(context, x)
@@ -370,8 +317,10 @@ class Attention(nn.Module):
 
         # rotary relative positional encoding
 
-        if exists(self.rotary_sinu_emb) and not has_context:
-            q, k = self.apply_rpe(q, k)
+        if exists(rotary_emb) and not has_context:
+            rot_q, rot_k = cast_tuple(rotary_emb, 2)
+            q = apply_rotary_pos_emb(q, rot_q)
+            k = apply_rotary_pos_emb(k, rot_k)
 
         # for tying row-attention, for MSA axial self-attention
 
@@ -435,7 +384,7 @@ class LinearAttention(Attention):
             nb_features = nb_features
         )
 
-    def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
+    def forward(self, x, context = None, mask = None, context_mask = None, rotary_emb = None, **kwargs):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
         context = default(context, x)
@@ -445,6 +394,13 @@ class LinearAttention(Attention):
         i, j = q.shape[-2], k.shape[-2]
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+
+        # rotary relative positional encoding
+
+        if exists(rotary_emb) and not has_context:
+            rot_q, rot_k = cast_tuple(rotary_emb, 2)
+            q = apply_rotary_pos_emb(q, rot_q)
+            k = apply_rotary_pos_emb(k, rot_k)
 
         # linear attention masking
 
@@ -489,7 +445,7 @@ class SparseAttention(Attention):
             attn_mask_mode = 'add'
         )
 
-    def forward(self, x, mask = None, **kwargs):
+    def forward(self, x, mask = None, rotary_emb = None, **kwargs):
         device, orig_shape, h = x.device, x.shape, self.heads
 
         b, n, _ = x.shape
@@ -506,8 +462,10 @@ class SparseAttention(Attention):
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        if exists(self.rotary_sinu_emb):
-            q, k = self.apply_rpe(q, k)
+        if exists(rotary_emb) and not has_context:
+            rot_q, rot_k = cast_tuple(rotary_emb, 2)
+            q = apply_rotary_pos_emb(q, rot_q)
+            k = apply_rotary_pos_emb(k, rot_k)
 
         key_pad_mask = None
         if exists(mask):
@@ -547,13 +505,15 @@ class AxialAttention(nn.Module):
         self.row_attn = row_attn
         self.col_attn = col_attn
 
-    def forward(self, x, shape, mask = None):
+    def forward(self, x, shape, mask = None, rotary_emb = None):
         b, n, d = x.shape
 
         num_axials = len(shape) - 2
         x = x.view(shape)
 
         h, w = shape[-3:-1]
+
+        # axial mask
 
         if num_axials == 3:
             t = shape[1]
@@ -572,12 +532,18 @@ class AxialAttention(nn.Module):
             if num_axials == 3:
                 f_mask = rearrange(mask, 'b t h w -> (b h w) t')
 
+        # axial pos emb
+
+        h_rotary_emb, w_rotary_emb = cast_tuple(rotary_emb, 2)
+
+        # axial attention
+
         out = 0
         axial_attn_count = 0
 
         if self.row_attn:
             w_x = rearrange(x, 'b t h w d -> (b t w) h d')
-            w_out = self.attn_width(w_x, mask = w_mask)
+            w_out = self.attn_width(w_x, mask = w_mask, rotary_emb = w_rotary_emb)
             w_out = rearrange(w_out, '(b t w) h d -> b t h w d', h = h, w = w, t = t)
 
             out += w_out
@@ -586,7 +552,7 @@ class AxialAttention(nn.Module):
         if self.col_attn:
             tie_attn_dim = x.shape[2] if self.tie_row_attn else None
             h_x = rearrange(x, 'b t h w d -> (b t h) w d')
-            h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim)
+            h_out = self.attn_height(h_x, mask = h_mask, tie_attn_dim = tie_attn_dim, rotary_emb = h_rotary_emb)
             h_out = rearrange(h_out, '(b t h) w d -> b t h w d', h = h, w = w, t = t)
 
             out += h_out
@@ -675,21 +641,25 @@ class SequentialSequence(nn.Module):
         msa_shape,
         mask = None,
         msa_mask = None,
+        seq_pos_emb = None,
+        msa_pos_emb = None,
+        seq_to_msa_pos_emb = None,
+        msa_to_seq_pos_emb = None,
         **kwargs
     ):
         for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
 
             # self attention
 
-            x = attn(x, shape = seq_shape, mask = mask) + x
+            x = attn(x, shape = seq_shape, mask = mask, rotary_emb = seq_pos_emb) + x
 
             if exists(m):
-                m = msa_attn(m, shape = msa_shape, mask = msa_mask) + m
+                m = msa_attn(m, shape = msa_shape, mask = msa_mask, rotary_emb = msa_pos_emb) + m
 
                 # cross attention
 
-                x = cross_attn(x, m, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape) + x
-                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape) + m
+                x = cross_attn(x, m, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape, rotary_emb = seq_to_msa_pos_emb) + x
+                m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape, rotary_emb = msa_to_seq_pos_emb) + m
 
             # feedforwards
 
@@ -740,7 +710,8 @@ class Alphafold2(nn.Module):
         structure_module_adj_neighbors = 2,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
-        disable_token_embed = False
+        disable_token_embed = False,
+        disable_cross_attn_rotary = False
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
@@ -751,6 +722,14 @@ class Alphafold2(nn.Module):
 
         self.token_emb = nn.Embedding(num_tokens, dim) if not disable_token_embed else Always(0)
         self.disable_token_embed = disable_token_embed
+
+        # positional embedding
+
+        self.self_attn_rotary_emb = FixedPositionalEmbedding(dim_head)
+
+        self.disable_cross_attn_rotary = disable_cross_attn_rotary
+        self.cross_attn_seq_rotary_emb = AxialRotaryEmbedding(dim_head)
+        self.cross_attn_msa_rotary_emb = FixedPositionalEmbedding((dim_head // 4) * 2)
 
         # template embedding
 
@@ -837,9 +816,9 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn))),
                 prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn, rotary_rpe = True)),
+                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
             ]))
 
@@ -1086,6 +1065,25 @@ class Alphafold2(nn.Module):
         x = rearrange(x, 'b t i j d -> b (t i j) d')
         x_mask = rearrange(x_mask, 'b t i j -> b (t i j)') if exists(mask) else None
 
+        # pos emb
+
+        num_msa = msa_shape[-3]
+        msa_seq_len = msa_shape[-2]
+
+        seq_pos_emb = self.self_attn_rotary_emb(n, device = device)
+        msa_pos_emb = self.self_attn_rotary_emb(msa_seq_len, device = device)
+
+        seq_to_msa_pos_emb = None
+        msa_to_seq_pos_emb = None
+
+        if not self.disable_cross_attn_rotary:
+            cross_seq_pos_emb = self.cross_attn_seq_rotary_emb(n, device = device)
+            cross_msa_pos_emb = self.cross_attn_msa_rotary_emb(msa_seq_len, device = device)
+            cross_msa_pos_emb = repeat(cross_msa_pos_emb, 'b n d -> b (m n) d', m = num_msa)
+
+            seq_to_msa_pos_emb = (cross_seq_pos_emb, cross_msa_pos_emb)
+            msa_to_seq_pos_emb = (cross_msa_pos_emb, cross_seq_pos_emb)
+
         # trunk
 
         x, m = self.net(
@@ -1094,7 +1092,11 @@ class Alphafold2(nn.Module):
             seq_shape,
             msa_shape,
             mask = x_mask,
-            msa_mask = msa_mask
+            msa_mask = msa_mask,
+            seq_pos_emb = seq_pos_emb,
+            msa_pos_emb = (msa_pos_emb, None),
+            seq_to_msa_pos_emb = seq_to_msa_pos_emb,
+            msa_to_seq_pos_emb = msa_to_seq_pos_emb
         )
 
         # remove templates, if present
