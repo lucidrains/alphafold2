@@ -438,11 +438,11 @@ def scn_atom_embedd(scn_seq):
     device = scn_seq.device
     batch_tokens = []
     # do loop in cpu
-    scn_seq = scn_seq.cpu()
+    scn_seq = scn_seq.cpu().tolist()
     for i,seq in enumerate(scn_seq):
-        batch_tokens.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa.item())]["atom_id_embedd"] \
-                                           for aa in seq]).long().to(device).unsqueeze(0) )
-    batch_tokens = torch.cat(batch_tokens, dim=0)
+        batch_tokens.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa)]["atom_id_embedd"] \
+                                           for aa in seq]) )
+    batch_tokens = torch.stack(batch_tokens, dim=0).long().to(device)
     return batch_tokens
 
 def nth_deg_adjacency(adj_mat, n=1, sparse=False):
@@ -493,24 +493,23 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
         * seq: (b, n) torch long.
         * adj_degree: int. adjacency degree
         * cloud_mask: mask selecting the present atoms.
-        * mat: whether to return as indexes or matrices. 
+        * mat: whether to return as indexes  or matrices. 
                for indexes, only 1 seq is supported 
-        Outputs: edge_idxs, edge_attrs
+        Outputs: edge_idxs, edge_attrs. 
     """
     device = seqs.device
-    # get starting poses for every aa
+    # set up container adj_mat (will get trimmed - less than 14)
     adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
-    # not needed to device since it's only for indices.
-    scaff = torch.zeros(seqs.shape[1], 14)
-    scaff[:, 0] = 1
-    idxs = torch.nonzero(scaff).reshape(-1)
-
-    for s,seq in enumerate(seqs): 
-        for i,idx in enumerate(idxs):
-            if i >= seq.shape[0]:
-                break
+    # not needed to device since it's only for indices
+    seq_list = seqs.cpu().tolist()
+    for s,seq in enumerate(seq_list): 
+        next_idx = 0
+        for i,idx in enumerate(seqs.shape[1]):
             # offset by pos in chain ( intra-aa bonds + with next aa )
-            bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] ).t()
+            aa_bonds = constants.AA_DATA[VOCAB._int2char[seq[i]]]['bonds']
+            next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
+            bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
+            next_idx += next_aa
             # delete link with next if final AA in seq
             if i == idxs.shape[0]-1:
                 bonds = bonds[:, :-1]
@@ -522,7 +521,9 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
         adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=False) # True
 
     if mat: 
-        return attr_mat.bool().to(seqs.device), attr_mat.to(device)
+        # trims the matrix at last row/col occupied
+        lims = attr_mat.nonzero().t().long().amax().item()+1
+        return attr_mat.bool().to(seqs.device)[...:, :lims, :lims], attr_mat.to(device)[...:, :lims, :lims]
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
         edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
@@ -580,33 +581,51 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
     new_coords[:, :, :3] = predicted[:, :, :3]
-    # set rest of positions to c_beta if present, else c_alpha
-    if n_aa == 4:
-        new_coords[:, :, 4:] = repeat(predicted[:, :, -1], 'b l d -> b l scn d', scn=10)
-    else:
-        new_coords[:, :, 4:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=10)
+
+    # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
+    # if place_oxygen: # deafults true. 
+    ## could init oxygen to carbonyl : new_coords[:, :, 3] = predicted[:, :, 2]
+    for s in range(batch):
+        # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
+        # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
+        psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
+                              for i in range(length) ])
+        # the angle for placing oxygen is opposite to psi of current res.
+        # psi not available for last one so pi/4 taken for now
+        bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
+        bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
+        correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
+        new_coords[s:s+1, :, 3] = nerf_torch(new_coords[s:s+1, :, 0], 
+                                             new_coords[s:s+1, :, 1], 
+                                             new_coords[s:s+1, :, 2], 
+                                             bond_lens, bond_angs, psis + correction)
+
+        # init cb to predicted pos or to hardcoded one
+        # analysis of cb param distros in mp_nerf paper has shown the following estimates (mu/std)
+        # dihedral (C_{-1}-N-CA-CB): (1.72/1.64), bond_length: (1.526/1.2e-07), anngle (N-CA-CB): (1.9146/0)
+
+        # set cb to predicted or predict by nerf (init first as c_alpha)
+        if n_aa == 4:
+            new_coords[s:s+1, :, 4] = predicted[s:s+1, :, -1]
+        else: 
+            l = new_coords.shape[1]
+            new_coords[s:s+1, :, 4] = new_coords[s:s+1, :, 1].clone()
+            new_coords[s:s+1, 1:, 4] = nerf_torch(new_coords[s:s+1, :-1, 2], 
+                                                  new_coords[s:s+1,  1:, 0], 
+                                                  new_coords[s:s+1,   :, 1], 
+                                                  torch.tensor([[1.526]*l]).to(device), 
+                                                  torch.tensor([[1.9146]*l]).to(device), 
+                                                  torch.tensor([[1.72]*l]).to(device))
+
+        # set rest of positions to a small random in the (cb-ca) direction + cbeta
+        new_coords[s:s+1, :, 5:] = repeat(new_coords[s:s+1, :, 4] - new_coords[s:s+1, :, 1], 
+                                          'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
+        new_coords[s:s+1, :, 5:] *= 2*torch.rand_like( new_coords[s:s+1, :, 5:, :1] )
+        new_coords[s:s+1, :, 5:] += repeat(new_coords[s:s+1, :, 4], 
+                                           'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
+
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
-    # hard-calculate oxygen position of carbonyl group with parallel version of NERF
-    if place_oxygen: 
-        # build (=O) position of revery aa in each chain
-        for s in range(batch):
-            # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
-            # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-            psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
-                                  for i in range(length) ])
-            # the angle for placing oxygen is opposite to psi of current res.
-            # psi not available for last one so pi/4 taken for now
-            bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
-            bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
-            correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
-            new_coords[:, :, 3] = nerf_torch(new_coords[:, :, 0], 
-                                             new_coords[:, :, 1], 
-                                             new_coords[:, :, 2], 
-                                             bond_lens, bond_angs, psis + correction)
-    else: 
-        # init oxygen to carbonyl
-        new_coords[:, :, 3] = predicted[:, :, 2]
 
     return new_coords
 
