@@ -591,9 +591,10 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
         # set rest of positions to a small random in the (cb-ca) direction + cbeta
         new_coords[s:s+1, :, 5:] = repeat(new_coords[s:s+1, :, 4] - new_coords[s:s+1, :, 1], 
                                           'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
-        new_coords[s:s+1, :, 5:] *= 2*torch.rand_like( new_coords[s:s+1, :, 5:, :1] )
-        new_coords[s:s+1, :, 5:] += repeat(new_coords[s:s+1, :, 4], 
-                                           'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
+        new_coords[s:s+1, :, 5:] += 0.25*torch.rand_like( new_coords[s:s+1, :, 5:] )
+        new_coords[s:s+1, :, 5:] *= 4*torch.rand_like( new_coords[s:s+1, :, 5:, :1] )
+        new_coords[s:s+1, :, 5:] += rearrange(new_coords[s:s+1, :, 4], 
+                                              'b l d -> b l scn_wo_cb d', scn_wo_cb=1)
 
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
