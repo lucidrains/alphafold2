@@ -588,7 +588,8 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     for s in range(batch):
         # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
         # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-        psis = torch.stack([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else torch.tensor(np.pi*5/4) \
+        psis = torch.stack([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] ) \
+                             if i < length-1 else torch.tensor(np.pi*5/4).to(backbones.device) \
                               for i in range(length) ])
         # the angle for placing oxygen is opposite to psi of current res.
         # psi not available for last one so pi/4 taken for now
