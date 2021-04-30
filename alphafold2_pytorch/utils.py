@@ -307,7 +307,7 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     """
     # use MSA transformer
     REPR_LAYER_NUM = 12
-    device = embedd_model.device
+    device = seq.device
     max_seq_len = msa.shape[-1]
     embedd_inputs = ids_to_embed_input(msa.cpu().tolist())
 
@@ -329,7 +329,7 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
             * embedd_dim: number of embedding dimensions. 1280 for ESM-1b
     """
     # use ESM transformer
-    device = embedd_model.device
+    device = seq.device
     REPR_LAYER_NUM = 33
     max_seq_len = seq.shape[-1]
     embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
@@ -504,14 +504,14 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
     seq_list = seqs.cpu().tolist()
     for s,seq in enumerate(seq_list): 
         next_idx = 0
-        for i,idx in enumerate(seqs.shape[1]):
+        for i,idx in enumerate(seq):
             # offset by pos in chain ( intra-aa bonds + with next aa )
-            aa_bonds = constants.AA_DATA[VOCAB._int2char[seq[i]]]['bonds']
+            aa_bonds = constants.AA_DATA[VOCAB._int2char[idx]]['bonds']
             next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
             bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
             next_idx += next_aa
             # delete link with next if final AA in seq
-            if i == idxs.shape[0]-1:
+            if i == seqs.shape[1] - 1:
                 bonds = bonds[:, :-1]
             # modify adj mat
             adj_mat[s, bonds[0], bonds[1]] = 1
@@ -588,7 +588,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     for s in range(batch):
         # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
         # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-        psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
+        psis = torch.stack([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
                               for i in range(length) ])
         # the angle for placing oxygen is opposite to psi of current res.
         # psi not available for last one so pi/4 taken for now
