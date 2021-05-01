@@ -552,7 +552,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
-    new_coords[:, :, :3] = predicted[:, :, :3]
+    new_coords[:, :, :3] = torch.ones_like(predicted[:, :, :3])
 
     # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
     # if place_oxygen: # deafults true. 
