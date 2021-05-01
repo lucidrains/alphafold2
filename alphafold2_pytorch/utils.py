@@ -581,7 +581,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
-    new_coords[:, :, :3] = predicted[:, :, :3].clone()
+    new_coords[:, :, :3] += predicted[:, :, :3]
 
     # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
     # if place_oxygen: # deafults true. 
@@ -589,7 +589,8 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     for s in range(batch):
         # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
         # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-        psis = torch.stack([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] ) \
+        seq_bb = backbones[s].detach()
+        psis = torch.stack([ get_dihedral_torch(*seq_bb[i*3 + 0 : i*3 + 4] ) \
                              if i < length-1 else torch.tensor(np.pi*5/4).to(backbones.device) \
                               for i in range(length) ])
         # the angle for placing oxygen is opposite to psi of current res.
@@ -608,7 +609,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
 
         # set cb to predicted or predict by nerf (init first as c_alpha)
         if n_aa == 4:
-            new_coords[s:s+1, :, 4] = predicted[s:s+1, :, -1].clone()
+            new_coords[s:s+1, :, 4] += predicted[s:s+1, :, -1]
         else: 
             l = new_coords.shape[1]
             new_coords[s:s+1, :, 4] = new_coords[s:s+1, :, 1].clone()
@@ -1003,7 +1004,7 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=
 
     # do custom expression if passed
     if custom is not None:
-        loss = custom(X_mat, Y_mat).mean()
+        return custom(X_mat, Y_mat).mean()
     # **2 ensures always positive. Later scale back to desired power
     else:
         loss = ( X_mat - Y_mat )**2 
