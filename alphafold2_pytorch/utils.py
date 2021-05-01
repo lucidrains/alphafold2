@@ -716,7 +716,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
     u = torch.stack([svd[0] for svd in svds], dim=0)
     s = torch.stack([svd[1] for svd in svds], dim=0)
     v = torch.stack([svd[2] for svd in svds], dim=0)
-    best_3d_coords = torch.bmm(u, torch.diag_embed(s).sqrt())[..., :3]
+    best_3d_coords = torch.bmm(u, torch.diag_embed(s).abs().sqrt())[..., :3]
 
     # only eigen - way faster but not weights
     if weights is None and eigen==True:
