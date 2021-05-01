@@ -487,7 +487,7 @@ def nth_deg_adjacency(adj_mat, n=1, sparse=False):
 
     return new_adj_mat, attr_mat
 
-def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
+def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=False):
     """ Returns the idxs of covalent bonds for a protein.
         Inputs 
         * seq: (b, n) torch long.
@@ -495,6 +495,7 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
         * cloud_mask: mask selecting the present atoms.
         * mat: whether to return as indexes  or matrices. 
                for indexes, only 1 seq is supported 
+        * sparse: bool. whether to use torch_sparse for adj_mat calc
         Outputs: edge_idxs, edge_attrs. 
     """
     device = seqs.device
@@ -518,12 +519,12 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
         # convert to undirected
         adj_mat[s] = adj_mat[s] + adj_mat[s].t()
         # do N_th degree adjacency
-        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=False) # True
+        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=sparse)
 
     if mat: 
         # trims the matrix at last row/col occupied
         lims = attr_mat.nonzero().t().long().amax().item()+1
-        return attr_mat.bool().to(seqs.device)[...:, :lims, :lims], attr_mat.to(device)[...:, :lims, :lims]
+        return attr_mat.bool().to(seqs.device)[..., :lims, :lims], attr_mat.to(device)[..., :lims, :lims]
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
         edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
