@@ -552,7 +552,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     # set backbone positions
-    new_coords[:, :, :3] = torch.ones_like(predicted[:, :, :3])
+    new_coords[:, :, :3] = predicted[:, :, :3].clone()
 
     # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
     # if place_oxygen: # deafults true. 
@@ -601,6 +601,9 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
 
+    # replace any nan-s with previous point location: 
+    nan_mask = torch.nonzero(new_coords!=new_coords, as_tuple=True)
+    new_coords[new_coords!=new_coords] = 0.
     return new_coords
 
 
@@ -844,7 +847,7 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
 
     # return percentage of lower than 0
     if prop: 
-        return torch.tensor( [(x<0).float().mean().item() for x in phis] ) 
+        return torch.cat( [(x<0).float().mean() for x in phis], dim=0 ) 
     return phis
 
 
