@@ -578,11 +578,12 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     device = backbones.device
     batch, length = backbones.shape[0], backbones.shape[1] // n_aa
     # build scaffold from (N, CA, C, CB)
-    new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
+    new_coords = torch.zeros(batch, length, n_atoms, 3).to(device)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
     with torch.autograd.set_detect_anomaly(True):
-        # set backbone positions
+        # set backbone positions and coords before computing angles
         new_coords[:, :, :3] = predicted[:, :, :3]
+        seq_coords = new_coords.detach()
 
         # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
         # if place_oxygen: # deafults true. 
@@ -591,7 +592,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
             # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
             # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
             seq_bb = backbones[s].detach()
-            psis = torch.stack([ get_dihedral_torch(*seq_bb[i*3 + 0 : i*3 + 4] ) \
+            psis = torch.stack([ af2utils.get_dihedral_torch(*seq_bb[i*3 + 0 : i*3 + 4] ) \
                                  if i < length-1 else torch.tensor(np.pi*5/4).to(backbones.device) \
                                   for i in range(length) ])
             # the angle for placing oxygen is opposite to psi of current res.
@@ -599,10 +600,11 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
             bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
             bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
             correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
-            new_coords[s:s+1, :, 3] = nerf_torch(new_coords[s:s+1, :, 0].clone(), 
-                                                 new_coords[s:s+1, :, 1].clone(), 
-                                                 new_coords[s:s+1, :, 2].clone(), 
-                                                 bond_lens, bond_angs, psis + correction)
+            
+            new_coords[s:s+1, :, 3] = af2utils.nerf_torch(seq_coords[s:s+1, :, 0], 
+                                                          seq_coords[s:s+1, :, 1],
+                                                          seq_coords[s:s+1, :, 2],
+                                                          bond_lens, bond_angs, psis + correction)
 
             # init cb to predicted pos or to hardcoded one
             # analysis of cb param distros in mp_nerf paper has shown the following estimates (mu/std)
@@ -614,19 +616,20 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
             else: 
                 l = new_coords.shape[1]
                 new_coords[s:s+1, :, 4] = predicted[s:s+1, :, 1].clone()
-                new_coords[s:s+1, 1:, 4] = nerf_torch(new_coords[s:s+1, :-1, 2].clone(), 
-                                                      new_coords[s:s+1,  1:, 0].clone(), 
-                                                      new_coords[s:s+1,   :, 1].clone(), 
-                                                      torch.tensor([[1.526]*l]).to(device), 
-                                                      torch.tensor([[1.9146]*l]).to(device), 
-                                                      torch.tensor([[1.72]*l]).to(device))
+                new_coords[s:s+1, 1:, 4] = af2utils.nerf_torch(seq_coords[s:s+1, :-1, 2].clone(), 
+                                                               seq_coords[s:s+1, 1:, 0].clone(), 
+                                                               seq_coords[s:s+1, 1:, 1].clone(), 
+                                                               torch.tensor([[1.526]*l]).to(device), 
+                                                               torch.tensor([[1.9146]*l]).to(device), 
+                                                               torch.tensor([[1.72]*l]).to(device))
 
             # set rest of positions to a small random in the (cb-ca) direction + cbeta
-            perturb = torch.rand_like( new_coords[s:s+1, :, 5:] )
-            ca_cb = new_coords[s:s+1, :, 4] - new_coords[s:s+1, :, 1]
-            ca_cb = (ca_cb + perturb)*4*perturb[..., :1]
-            new_coords[s:s+1, :, 5:] = repeat(ca_cb, 
+            new_coords[s:s+1, :, 5:] = repeat(new_coords[s:s+1, :, 4].detach() - seq_coords[s:s+1, :, 1], 
                                               'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
+            new_coords[s:s+1, :, 5:] += .25*torch.rand_like( seq_coords[s:s+1, :, 5:] )
+            new_coords[s:s+1, :, 5:] *=   4*torch.rand_like( seq_coords[s:s+1, :, 5:, :1] )
+            new_coords[s:s+1, :, 5:] += repeat(seq_coords[s:s+1, :, 4], 
+                                               'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
 
         if cloud_mask is not None:
             new_coords[torch.logical_not(cloud_mask)] = 0.
