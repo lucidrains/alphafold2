@@ -579,7 +579,7 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
 
         # set cb to predicted or predict by nerf (init first as c_alpha)
         if n_aa == 4:
-            new_coords[s:s+1, :, 4] = predicted[s:s+1, :, -1]
+            new_coords[s:s+1, :, 4] = predicted[s:s+1, :, -1].clone()
         else: 
             l = new_coords.shape[1]
             new_coords[s:s+1, :, 4] = new_coords[s:s+1, :, 1].clone()
@@ -847,7 +847,7 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
 
     # return percentage of lower than 0
     if prop: 
-        return torch.cat( [(x<0).float().mean() for x in phis], dim=0 ) 
+        return torch.stack([(x<0).float().mean() for x in phis], dim=0 ) 
     return phis
 
 
