@@ -1083,23 +1083,27 @@ class Alphafold2(nn.Module):
 
         # pos emb
 
-        num_msa = msa_shape[-3]
-        msa_seq_len = msa_shape[-2]
-
         seq_pos_emb = self.self_attn_rotary_emb(n, device = device)
-        msa_pos_emb = self.self_attn_rotary_emb(msa_seq_len, device = device)
 
+        msa_pos_emb = None
         seq_to_msa_pos_emb = None
         msa_to_seq_pos_emb = None
 
-        if not self.disable_cross_attn_rotary:
-            cross_seq_pos_emb = self.cross_attn_seq_rotary_emb(n, device = device)
-            cross_msa_pos_emb = self.cross_attn_msa_rotary_emb(msa_seq_len, device = device)
+        if exists(msa):
+            num_msa = msa_shape[-3]
+            msa_seq_len = msa_shape[-2]
 
-            cross_msa_pos_emb = list(map(lambda t: repeat(t, 'b n d -> b (m n) (r d)', m = num_msa, r = 2), cross_msa_pos_emb))
+            msa_pos_emb = self.self_attn_rotary_emb(msa_seq_len, device = device)
 
-            seq_to_msa_pos_emb = (cross_seq_pos_emb, cross_msa_pos_emb)
-            msa_to_seq_pos_emb = (cross_msa_pos_emb, cross_seq_pos_emb)
+
+            if not self.disable_cross_attn_rotary:
+                cross_seq_pos_emb = self.cross_attn_seq_rotary_emb(n, device = device)
+                cross_msa_pos_emb = self.cross_attn_msa_rotary_emb(msa_seq_len, device = device)
+
+                cross_msa_pos_emb = list(map(lambda t: repeat(t, 'b n d -> b (m n) (r d)', m = num_msa, r = 2), cross_msa_pos_emb))
+
+                seq_to_msa_pos_emb = (cross_seq_pos_emb, cross_msa_pos_emb)
+                msa_to_seq_pos_emb = (cross_msa_pos_emb, cross_seq_pos_emb)
 
         # trunk
 
