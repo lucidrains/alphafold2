@@ -23,6 +23,23 @@ def test_main():
     )
     assert True
 
+def test_no_msa():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    mask = torch.ones_like(seq).bool()
+
+    distogram = model(
+        seq,
+        mask = mask
+    )
+    assert True
+
 def test_anglegrams():
     model = Alphafold2(
         dim = 32,
