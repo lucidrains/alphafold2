@@ -285,7 +285,7 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     with torch.no_grad():
         results = embedd_model(msa_batch_tokens.to(device), repr_layers=[REPR_LAYER_NUM], return_contacts=False)
     # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:, :]
+    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:max_seq_len+1, :]
     return token_reps
 
 
@@ -309,7 +309,7 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
     with torch.no_grad():
         results = embedd_model(batch_tokens.to(device), repr_layers=[REPR_LAYER_NUM], return_contacts=False)
     # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:, :].unsqueeze(dim=1)
+    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:max_seq_len+1, :].unsqueeze(dim=1)
     return token_reps
 
 def get_all_protein_ids(dataloader, verbose=False):
@@ -367,10 +367,10 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     scn_seq = scn_seq.cpu().tolist()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa)]['cloud_mask'] \
-                                         for aa in seq]).bool().to(device).unsqueeze(0) )
+        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB._int2char[aa]]['cloud_mask'] \
+                                         for aa in seq]).bool().to(device) )
     # concat in last dim
-    batch_mask = torch.cat(batch_mask, dim=0)
+    batch_mask = torch.stack(batch_mask, dim=0)
     # return mask (boolean or indexes)
     if boolean:
         return batch_mask.bool()
@@ -464,14 +464,16 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         * seq: (b, n) torch long.
         * adj_degree: int. adjacency degree
         * cloud_mask: mask selecting the present atoms.
-        * mat: whether to return as indexes  or matrices. 
-               for indexes, only 1 seq is supported 
+        * mat: whether to return as indexes of only atoms (PyG version)
+               or matrices of masked atoms (for batched training). 
+               for indexes, only 1 seq is supported.
         * sparse: bool. whether to use torch_sparse for adj_mat calc
         Outputs: edge_idxs, edge_attrs. 
     """
     device = seqs.device
     # set up container adj_mat (will get trimmed - less than 14)
-    adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
+    next_aa = NUM_COORDS_PER_RES
+    adj_mat = torch.zeros(seqs.shape[0], *[seqs.shape[1]*NUM_COORDS_PER_RES]*2)
     # not needed to device since it's only for indices
     seq_list = seqs.cpu().tolist()
     for s,seq in enumerate(seq_list): 
@@ -479,7 +481,9 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         for i,idx in enumerate(seq):
             # offset by pos in chain ( intra-aa bonds + with next aa )
             aa_bonds = constants.AA_DATA[VOCAB._int2char[idx]]['bonds']
-            next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
+            # correct next position. for indexes functionality
+            if mat:
+                next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
             bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
             next_idx += next_aa
             # delete link with next if final AA in seq
@@ -493,9 +497,8 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=sparse)
 
     if mat: 
-        # trims the matrix at last row/col occupied
-        lims = attr_mat.nonzero().t().long().amax().item()+1
-        return attr_mat.bool().to(seqs.device)[..., :lims, :lims], attr_mat.to(device)[..., :lims, :lims]
+        # return the full matrix/tensor
+        return attr_mat.bool().to(seqs.device), attr_mat.to(device)
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
         edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
@@ -953,7 +956,8 @@ def kabsch_numpy(X, Y):
 
 # metrics - more formulas here: http://predictioncenter.org/casp12/doc/help.html
 
-def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=None, distmat_mask=None):
+def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
+                       custom=None, distmat_mask=None, clamp=None):
     """ Calculates a loss on the distance matrix - no need to align structs.
         Inputs: 
         * X: (N, d) tensor. the predicted structure. One of (X, X_mat) is needed.
@@ -965,13 +969,18 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=
         * custom: func or None. custom loss over distance matrices. 
                   ex: lambda x,y: 1 - 1/ (1 + ((x-y))**2) (1 is very bad. 0 is good)
         * distmat_mask: (N, N) mask (boolean or weights for each ij pos). optional.
+        * clamp: tuple of (min,max) values for clipping distance matrices. ex: (0,150)
     """
     assert (X is not None or X_mat is not None) and \
            (Y is not None or Y_mat is not None), "The true and predicted coords or dist mats must be provided"
     # calculate distance matrices
     if X_mat is None: 
+        if clamp is not None:
+            X = torch.clamp(X, *clamp)
         X_mat = torch.cdist(X, X, p=p)
     if Y_mat is None: 
+        if clamp is not None:
+            Y = torch.clamp(Y, *clamp)
         Y_mat = torch.cdist(Y, Y, p=p)
     if distmat_mask is None:
         distmat_mask = torch.ones_like(Y_mat).bool()
