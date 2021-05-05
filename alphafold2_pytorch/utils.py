@@ -341,6 +341,41 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
     token_reps = results["representations"][REPR_LAYER_NUM][..., 1:max_seq_len+1, :].unsqueeze(dim=1)
     return token_reps
 
+
+def get_t5_embedd(seq, model_name="Rostlab/prot_t5_xl_uniref50", msa_data=None, device=None):
+    """ Returns the ProtT5-XL-U50 embeddings for a protein.
+        Inputs:
+        * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
+        * model_name:  model name for embedding via transformers library.
+        Outputs: tensor of (batch, n_seqs, L, embedd_dim)
+            * n_seqs: number of sequences in the MSA. 1 for T5 models
+            * embedd_dim: number of embedding dimensions. 1024 for T5 models
+    """
+    # get params and prepare
+    device = seq.device if device is None else device
+    max_seq_len = seq.shape[-1]
+    embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
+
+    tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
+    model = T5EncoderModel.from_pretrained(model_name)
+    # prepare model 
+    model = model.to(device)
+    model = model.eval()
+    if torch.cuda.is_available():
+        model = model.half()
+    # convert iteratively
+    inputs_embedding = []
+    shift_left, shift_right = 0, -1
+    for sample in embedd_inputs:
+        with torch.no_grad():
+            ids = tokenizer.batch_encode_plus([sample], add_special_tokens=True, padding=True, is_split_into_words=True, return_tensors="pt")
+            embedding = model(input_ids=ids['input_ids'].to(device))[0]
+            inputs_embedding.append(embedding[0].detach()[shift_left:shift_right]) # .cpu().numpy()
+    # return (batch, seq_len, embedd_dim)
+    token_reps = torch.stack(inputs_embedding, dim=0)
+    return token_reps
+
+
 def get_all_protein_ids(dataloader, verbose=False):
     """ Given a sidechainnet dataloader for a CASP version, 
         Returns all the ids belonging to proteins.
