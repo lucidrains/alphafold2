@@ -626,6 +626,62 @@ class SE3TransformerWrapper(nn.Module):
         coords = coords + refined_coords
         return x, coords
 
+# coupling module, from trunk to initial coordinates for refinement
+
+class CoordModuleMDS(nn.Module):
+    def __init__(
+        self,
+        mds_iters,
+        use_eigen_mds,
+        predict_real_value_distances
+    ):
+        super().__init__()
+        self.mds_iters = mds_iters
+        self.use_eigen_mds = use_eigen_mds
+        self.predict_real_value_distances = predict_real_value_distances
+
+    def forward(
+        self,
+        *,
+        distance_pred,
+        trunk_embeds,
+        N_mask,
+        CA_mask,
+        C_mask,
+        cloud_mask,
+        bb_flat_mask_crossed,
+        num_backbone_atoms
+    ):
+        if self.predict_real_value_distances:
+            distances, distance_std = distance_pred.unbind(dim = -1)
+            weights = (1 / (1 + distance_std)) # could also do a distance_std.sigmoid() here
+        else:
+            distances, weights = center_distogram_torch(distance_pred)
+
+        # set unwanted atoms to weight=0 (like C-beta in glycine)
+
+        if not self.use_eigen_mds:
+            weights.masked_fill_( torch.logical_not(bb_flat_mask_crossed), 0.)
+        else:
+            weights = None
+
+        coords_3d, _ = MDScaling(
+            distances,
+            weights = weights,
+            iters = self.mds_iters,
+            fix_mirror = True,
+            N_mask = N_mask,
+            CA_mask = CA_mask,
+            C_mask = C_mask
+        )
+
+        coords = rearrange(coords_3d, 'b c n -> b n c')
+        # will init all sidechain coords to cbeta if present else c_alpha
+        coords = sidechain_container(coords, n_aa = num_backbone_atoms, cloud_mask = cloud_mask)
+        coords = rearrange(coords, 'b n l d -> b (n l) d')
+
+        return coords
+
 # main class
 
 class SequentialSequence(nn.Module):
@@ -699,7 +755,6 @@ class Alphafold2(nn.Module):
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
         return_aux_logits = False,
-        mds_iters = 5,
         use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 1,
@@ -712,7 +767,10 @@ class Alphafold2(nn.Module):
         cross_attn_linear_projection_update_every = 1000,
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
-        structure_num_global_nodes = 0
+        structure_num_global_nodes = 0,
+        mds_iters = 5,                          # mds coupling related parameters
+        use_eigen_mds = False,
+        coords_module = None                    # custom coords generation module
     ):
         super().__init__()
         assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
@@ -870,6 +928,17 @@ class Alphafold2(nn.Module):
             nn.Linear(dim, dim_distance_pred)
         )
 
+        # coords modules
+
+        self.trunk_to_coords = coords_module
+
+        if not exists(self.trunk_to_coords):
+            self.trunk_to_coords = CoordModuleMDS(
+                mds_iters,
+                use_eigen_mds,
+                predict_real_value_distances,
+            )
+
         # global node tokens for se3 structure module
 
         global_feats_dim = None
@@ -954,8 +1023,7 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False,
-        use_eigen_mds = False
+        return_confidence = False
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -1162,38 +1230,29 @@ class Alphafold2(nn.Module):
         bb_flat_mask = rearrange(chain_mask[..., :self.num_backbone_atoms], 'b l c -> b (l c)')
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
-        # structural refinement
-
-        if self.predict_real_value_distances:
-            distances, distance_std = distance_pred.unbind(dim = -1)
-            weights = (1 / (1 + distance_std)) # could also do a distance_std.sigmoid() here
-        else:
-            distances, weights = center_distogram_torch(distance_pred)
-
-        # set unwanted atoms to weight=0 (like C-beta in glycine)
-        weights.masked_fill_( torch.logical_not(bb_flat_mask_crossed), 0.)
-
-        coords_3d, _ = MDScaling(distances, 
-            weights = weights if not use_eigen_mds else None,
-            iters = self.mds_iters,
-            fix_mirror = True,
+        coords = self.trunk_to_coords(
+            distance_pred = distance_pred,
+            trunk_embeds = trunk_embeds,
             N_mask = N_mask,
             CA_mask = CA_mask,
-            C_mask = C_mask
+            C_mask = C_mask,
+            cloud_mask = cloud_mask,
+            bb_flat_mask_crossed = bb_flat_mask_crossed,
+            num_backbone_atoms = self.num_backbone_atoms
         )
-        coords = rearrange(coords_3d, 'b c n -> b n c')
-        # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(coords, n_aa = self.num_backbone_atoms, cloud_mask=cloud_mask)
-        coords = rearrange(coords, 'b n l d -> b (n l) d')
-        atom_tokens = scn_atom_embedd(seq) # not used for now, but could be
 
-        num_atoms = cloud_mask.shape[-1]
+        # derive nodes
+
+        num_atoms_per_residue = coords.shape[-2] // seq.shape[1]
 
         structure_embed = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = num_atoms)
+        x = repeat(x, 'b n d -> b n l d', l = num_atoms_per_residue)
+
+        atom_tokens = scn_atom_embedd(seq)
         x += self.atom_tokens_embed(atom_tokens)
+
         x = rearrange(x, 'b n l d -> b (n l) d')
 
         # derive edges from trunk -> equivariant network, if needed
@@ -1202,13 +1261,8 @@ class Alphafold2(nn.Module):
         if exists(self.to_equivariant_net_edges):
             edges = self.to_equivariant_net_edges(trunk_embeds)
             edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
-            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms, m = num_atoms)
+            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms_per_residue, m = num_atoms)
             edges = edges.double()
-
-        # prepare float64 precision for equivariance
-
-        original_dtype = coords.dtype
-        x, coords = map(lambda t: t.double(), (x, coords))
 
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
@@ -1230,7 +1284,12 @@ class Alphafold2(nn.Module):
             pooled_feats = pooled_feats.double()
             structure_kwargs = {'global_feats': pooled_feats}
 
-        # /adjacency mat calc - above should be pre-calculated and cached in a buffer
+        # prepare float64 precision for equivariance
+
+        original_dtype = coords.dtype
+        x, coords = map(lambda t: t.double(), (x, coords))
+
+        # iterative refinement with equivariant transformer in high precision
 
         with torch_default_dtype(torch.float64):
             for _ in range(self.structure_module_refinement_iters):
