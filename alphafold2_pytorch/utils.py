@@ -1,5 +1,6 @@
 # utils for working with 3d-protein structures
 import os
+import re
 import numpy as np
 import torch
 from functools import wraps
@@ -265,6 +266,35 @@ def ids_to_embed_input(x):
 
     return out
 
+def ids_to_prottran_input(x):
+    """ Returns the amino acid string input for calculating the ESM and MSA transformer embeddings
+        Inputs:
+        * x: any deeply nested list of integers that correspond with amino acid id
+    """
+    assert isinstance(x, list), 'input must be a list'
+    id2aa = VOCAB._int2char
+    out = []
+
+    for ids in x:
+        chars = ' '.join([id2aa[i] for i in ids])
+        chars = re.sub(r"[UZOB]", "X", chars)
+        out.append(chars)
+
+    return out
+
+def get_prottran_embedd(seq, model, tokenizer, device = None):
+    from transformers import pipeline
+
+    fe = pipeline('feature-extraction', model = model, tokenizer = tokenizer, device = (-1 if not exists(device) else device.index))
+
+    max_seq_len = seq.shape[1]
+    embedd_inputs = ids_to_prottran_input(seq.cpu().tolist())
+
+    embedding = fe(embedd_inputs)
+    embedding = torch.tensor(embedding, device = device)
+
+    return embedding[:, 1:(max_seq_len + 1)]
+
 def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     """ Returns the MSA_tr embeddings for a protein.
         Inputs: 
@@ -287,7 +317,6 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     # index 0 is for start token. so take from 1 one
     token_reps = results["representations"][REPR_LAYER_NUM][..., 1:, :]
     return token_reps
-
 
 def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
     """ Returns the ESM embeddings for a protein.

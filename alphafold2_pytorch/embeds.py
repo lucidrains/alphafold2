@@ -2,10 +2,33 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from alphafold2_pytorch.utils import get_msa_embedd, get_esm_embedd, exists
-from alphafold2_pytorch.constants import MSA_MODEL_PATH, MSA_EMBED_DIM, ESM_MODEL_PATH, ESM_EMBED_DIM
+from alphafold2_pytorch.utils import get_msa_embedd, get_esm_embedd, get_prottran_embedd, exists
+from alphafold2_pytorch.constants import MSA_MODEL_PATH, MSA_EMBED_DIM, ESM_MODEL_PATH, ESM_EMBED_DIM, PROTTRAN_EMBED_DIM
 
 from einops import rearrange
+
+class ProtTranEmbedWrapper(nn.Module):
+    def __init__(self, *, alphafold2):
+        super().__init__()
+        from transformers import AutoTokenizer, AutoModel
+
+        self.alphafold2 = alphafold2
+        self.project_embed = nn.Linear(PROTTRAN_EMBED_DIM, alphafold2.dim)
+        self.tokenizer = AutoTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
+        self.model = AutoModel.from_pretrained('Rostlab/prot_bert')
+
+    def forward(self, seq, msa, msa_mask = None, **kwargs):
+        device = seq.device
+        num_msa = msa.shape[1]
+        msa_flat = rearrange(msa, 'b m n -> (b m) n')
+
+        seq_embed = get_prottran_embedd(seq, self.model, self.tokenizer, device = device)
+        msa_embed = get_prottran_embedd(msa_flat, self.model, self.tokenizer, device = device)
+
+        seq_embed, msa_embed = map(self.project_embed, (seq_embed, msa_embed))
+        msa_embed = rearrange(msa_embed, '(b m) n d -> b m n d', m = num_msa)
+
+        return self.alphafold2(seq, msa, seq_embed = seq_embed, msa_embed = msa_embed, msa_mask = msa_mask, **kwargs)
 
 class MSAEmbedWrapper(nn.Module):
     def __init__(self, *, alphafold2):
