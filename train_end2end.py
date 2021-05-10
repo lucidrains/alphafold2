@@ -42,6 +42,7 @@ DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
 if FEATURES == "esm":
     # from pytorch hub (almost 30gb)
     embedd_model, alphabet = torch.hub.load("facebookresearch/esm", "esm1b_t33_650M_UR50S")
+    batch_converter = alphabet.get_batch_converter()
     ##  alternatively do
     # import esm # after installing esm
     # model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()

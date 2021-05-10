@@ -103,7 +103,8 @@ model = Alphafold2(
     structure_module_depth = 1,             # depth
     structure_module_heads = 1,             # heads
     structure_module_dim_head = 16,         # dimension of heads
-    structure_module_refinement_iters = 2   # number of equivariant coordinate refinement iterations
+    structure_module_refinement_iters = 2,  # number of equivariant coordinate refinement iterations
+    structure_num_global_nodes = 1          # number of global nodes for the structure module, only works with SE3 transformer
 ).cuda()
 
 seq = torch.randint(0, 21, (2, 64)).cuda()
@@ -119,9 +120,9 @@ coords = model(
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
 
-## MSA or ESM Embeddings
+## MSA, ESM, or ProtTrans Embeddings
 
-This repository offers you an easy supplement the network with pre-trained embeddings from <a href="https://github.com/facebookresearch/esm">Facebook AI</a>. It contains wrappers for the pre-trained <a href="https://www.biorxiv.org/content/10.1101/622803v1.full">ESM</a> or <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">MSA Transformers</a>.
+This repository offers you an easy supplement the network with pre-trained embeddings from <a href="https://github.com/facebookresearch/esm">Facebook AI</a>. It contains wrappers for the pre-trained <a href="https://www.biorxiv.org/content/10.1101/622803v1.full">ESM</a>, <a href="https://www.biorxiv.org/content/10.1101/2021.02.12.430858v1">MSA Transformers</a> or <a href="https://www.biorxiv.org/content/early/2021/05/04/2020.07.12.199554">Protein Transformer</a>.
 
 There are some prerequisites. You will need to make sure that you have Nvidia's <a href="https://github.com/NVIDIA/apex#linux">apex</a> library installed, as the pretrained transformers make use of some fused operations.
 
@@ -133,7 +134,7 @@ cd apex
 pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
 ```
 
-Next, you will simply have to import and wrap your `Alphafold2` instance with a `ESMEmbedWrapper` or `MSAEmbedWrapper` and it will take care of embedding both the sequence and the multiple-sequence alignments for you (and projecting it to the dimensions as specified on your model). Nothing needs to be changed save for adding the wrapper.
+Next, you will simply have to import and wrap your `Alphafold2` instance with a `ESMEmbedWrapper`, `MSAEmbedWrapper`, or `ProtTranEmbedWrapper` and it will take care of embedding both the sequence and the multiple-sequence alignments for you (and projecting it to the dimensions as specified on your model). Nothing needs to be changed save for adding the wrapper.
 
 ```python
 import torch
@@ -481,6 +482,20 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
 ```
 
 ```bibtex
+@article {Elnaggar2020.07.12.199554,
+    author  = {Elnaggar, Ahmed and Heinzinger, Michael and Dallago, Christian and Rehawi, Ghalia and Wang, Yu and Jones, Llion and Gibbs, Tom and Feher, Tamas and Angerer, Christoph and Steinegger, Martin and BHOWMIK, DEBSINDHU and Rost, Burkhard},
+    title   = {ProtTrans: Towards Cracking the Language of Life{\textquoteright}s Code Through Self-Supervised Deep Learning and High Performance Computing},
+    elocation-id = {2020.07.12.199554},
+    year    = {2021},
+    doi     = {10.1101/2020.07.12.199554},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/05/04/2020.07.12.199554},
+    eprint  = {https://www.biorxiv.org/content/early/2021/05/04/2020.07.12.199554.full.pdf},
+    journal = {bioRxiv}
+}
+```
+
+```bibtex
 @misc{king2020sidechainnet,
     title   = {SidechainNet: An All-Atom Protein Structure Dataset for Machine Learning}, 
     author  = {Jonathan E. King and David Ryan Koes},
@@ -532,5 +547,16 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     eprint  = {2102.09844},
     archivePrefix = {arXiv},
     primaryClass = {cs.LG}
+}
+```
+
+```bibtex
+@misc{su2021roformer,
+    title   = {RoFormer: Enhanced Transformer with Rotary Position Embedding},
+    author  = {Jianlin Su and Yu Lu and Shengfeng Pan and Bo Wen and Yunfeng Liu},
+    year    = {2021},
+    eprint  = {2104.09864},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CL}
 }
 ```

@@ -1,4 +1,7 @@
 import torch
+from torch import nn
+from einops import repeat
+
 from alphafold2_pytorch.alphafold2 import Alphafold2
 from alphafold2_pytorch.utils import *
 
@@ -20,6 +23,23 @@ def test_main():
         msa,
         mask = mask,
         msa_mask = msa_mask
+    )
+    assert True
+
+def test_no_msa():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    mask = torch.ones_like(seq).bool()
+
+    distogram = model(
+        seq,
+        mask = mask
     )
     assert True
 
@@ -142,10 +162,10 @@ def test_coords_se3():
         structure_module_knn = 2
     )
 
-    seq = torch.randint(0, 21, (2, 16))
+    seq = torch.randint(0, 21, (2, 8))
     mask = torch.ones_like(seq).bool()
 
-    msa = torch.randint(0, 21, (2, 5, 32))
+    msa = torch.randint(0, 21, (2, 5, 16))
     msa_mask = torch.ones_like(msa).bool()
 
     coords = model(
@@ -155,7 +175,93 @@ def test_coords_se3():
         msa_mask = msa_mask
     )
 
-    assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
+    assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
+
+def test_custom_coords_module():
+
+    class CustomCoords(nn.Module):
+        def __init__(self, dim, structure_module_dim):
+            super().__init__()
+            self.to_coords = nn.Linear(dim, 3)
+
+        def forward(
+            self,
+            *,
+            distance_pred,
+            trunk_embeds,
+            num_backbone_atoms,
+            cloud_mask,
+            **kwargs
+        ):
+            coords = self.to_coords(trunk_embeds.sum(dim = 2))
+            coords = repeat(coords, 'b n c -> b (n l) c', l = cloud_mask.shape[-1])
+            return coords
+
+    coords_module = CustomCoords(
+        dim = 32,
+        structure_module_dim = 4
+    )
+
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        predict_coords = True,
+        num_backbone_atoms = 3,
+        structure_module_dim = 4,
+        structure_module_depth = 1,
+        structure_module_heads = 1,
+        structure_module_dim_head = 1,
+        structure_module_knn = 2,
+        coords_module = coords_module
+    )
+
+    seq = torch.randint(0, 21, (2, 8))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 16))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+
+    assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
+
+def test_coords_se3_with_global_nodes():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        predict_coords = True,
+        num_backbone_atoms = 3,
+        structure_module_dim = 1,
+        structure_module_depth = 1,
+        structure_module_heads = 1,
+        structure_module_dim_head = 1,
+        structure_module_knn = 2,
+        structure_num_global_nodes = 2
+    )
+
+    seq = torch.randint(0, 21, (2, 8))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 16))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+
+    assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
 
 def test_edges_to_equivariant_network():
     model = Alphafold2(
@@ -200,10 +306,10 @@ def test_real_value_distance_with_coords():
         structure_module_knn = 2
     )
 
-    seq = torch.randint(0, 21, (2, 16))
+    seq = torch.randint(0, 21, (2, 8))
     mask = torch.ones_like(seq).bool()
 
-    msa = torch.randint(0, 21, (2, 5, 32))
+    msa = torch.randint(0, 21, (2, 5, 16))
     msa_mask = torch.ones_like(msa).bool()
 
     coords = model(
@@ -213,7 +319,7 @@ def test_real_value_distance_with_coords():
         msa_mask = msa_mask
     )
 
-    assert coords.shape == (2, 16 * 14, 3), 'must output coordinates'
+    assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
 
 def test_coords_se3_backwards():
     model = Alphafold2(
@@ -227,13 +333,13 @@ def test_coords_se3_backwards():
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 2
+        structure_module_knn = 1
     )
 
-    seq = torch.randint(0, 21, (2, 16))
+    seq = torch.randint(0, 21, (2, 8))
     mask = torch.ones_like(seq).bool()
 
-    msa = torch.randint(0, 21, (2, 5, 32))
+    msa = torch.randint(0, 21, (2, 5, 16))
     msa_mask = torch.ones_like(msa).bool()
 
     coords = model(
