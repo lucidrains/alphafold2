@@ -288,7 +288,7 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     return token_reps
 
 
-def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
+def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None, device = None):
     """ Returns the ESM embeddings for a protein.
         Inputs:
         * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)

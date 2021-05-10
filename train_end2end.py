@@ -1,5 +1,6 @@
 import torch
 from torch.optim import Adam
+from torch import nn
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from einops import rearrange
@@ -7,7 +8,7 @@ from einops import rearrange
 # data
 
 import sidechainnet as scn
-from sidechainnet.sequence.utils import VOCAB
+# from sidechainnet.sequence.utils import VOCAB
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 
 # models
@@ -108,11 +109,11 @@ for _ in range(NUM_BATCHES):
         # mask the atoms and backbone positions for each residue
 
         # sequence embedding (msa / esm / attn / or nothing)
-        msa, embedds = None
+        msa, embedds = None, None
 
         # get embedds
         if FEATURES == "esm":
-            embedds = get_esm_embedd(seq, embedd_model, batch_converter)
+            embedds = get_esm_embedd(seq, embedd_model, batch_converter, device=DEVICE)
         # get msa here
         elif FEATURES == "msa":
             pass 

@@ -25,7 +25,8 @@ from torch.nn import (TransformerEncoder, TransformerDecoder,
 class Seq2SeqTransformer(nn.Module):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward: int = 512, num_head: int = 8, dropout: float = 0.1, activation: str = "relu"):
+                 dim_feedforward: int = 512, num_head: int = 8, dropout: float = 0.1, activation: str = "relu",
+                 max_len: int = 5000):
         super(Seq2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_head,
                                                 dim_feedforward=dim_feedforward, dropout=dropout, activation=activation)
@@ -37,15 +38,21 @@ class Seq2SeqTransformer(nn.Module):
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
         self.src_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, maxlen=max_len)
 
     # todo make mask work
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
-                tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
-        src_emb = self.src_tok_emb(src)
-        tgt_emb = self.tgt_tok_emb(trg)
-        memory = self.transformer_encoder(src_emb)
-        outs = self.transformer_decoder(tgt_emb, memory)
+                tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor,
+                use_padding_mask: bool = False):
+        src_emb = self.positional_encoding(self.src_tok_emb(src))
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg))
+        if use_padding_mask:
+            memory = self.transformer_encoder(src_emb, src_key_padding_mask=src_padding_mask)
+            outs = self.transformer_decoder(tgt_emb, memory, tgt_key_padding_mask=tgt_padding_mask)
+        else:
+            memory = self.transformer_encoder(src_emb)
+            outs = self.transformer_decoder(tgt_emb, memory)
         return self.generator(outs)
 
     def encode(self, src: Tensor, src_mask: Tensor):

@@ -23,8 +23,8 @@ NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = 21
-THRESHOLD_LENGTH = 250
-BATCH_SIZE = 100
+THRESHOLD_LENGTH = 50
+BATCH_SIZE = 128
 
 # transformer constants
 
@@ -32,11 +32,12 @@ SRC_VOCAB_SIZE = 22  # number of amino acids + padding 21
 TGT_VOCAB_SIZE = 3  # backbone torsion angle
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
-EMB_SIZE = 512
-NUM_HEAD = 8
-FFN_HID_DIM = 512
+EMB_SIZE = 256
+NUM_HEAD = 16
+FFN_HID_DIM = 128
+LOSS_WITHOUT_PADDING = True
 
-MODEL_PATH = f"model_{THRESHOLD_LENGTH}_{NUM_ENCODER_LAYERS}_{NUM_DECODER_LAYERS}_{FFN_HID_DIM}.pt"
+MODEL_PATH = f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}.pt"
 # set device
 
 DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
@@ -122,7 +123,8 @@ def train_epoch(model, train_iter, optimizer):
             DEVICE).bool()
         seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
-        angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
+        if not LOSS_WITHOUT_PADDING:
+            angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
         # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
         mask = ~F.pad(mask, (0, THRESHOLD_LENGTH - l, 0, THRESHOLD_LENGTH - l), value=False)
 
@@ -135,8 +137,12 @@ def train_epoch(model, train_iter, optimizer):
                              tgt_mask=mask, src_padding_mask=src_padding_mask,
                              tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
 
+        optimizer.zero_grad()
         # loss
-        loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+        if LOSS_WITHOUT_PADDING:
+            loss = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+        else:
+            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
         loss.backward()
 
         optimizer.step()
@@ -158,7 +164,8 @@ def evaluate(model, val_iter):
             DEVICE).bool()
         seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
-        angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
+        if not LOSS_WITHOUT_PADDING:
+            angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
         # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
         mask = F.pad(mask, (0, THRESHOLD_LENGTH - l), value=False)
 
@@ -173,7 +180,10 @@ def evaluate(model, val_iter):
 
         # loss
 
-        loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+        if LOSS_WITHOUT_PADDING:
+            loss = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+        else:
+            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
 
         losses += loss.item()
     return losses / len(val_iter)
@@ -190,11 +200,12 @@ raw_data = scn.load(
 
 filtered_raw_data = filter_dictionary_by_seq_length(raw_data, THRESHOLD_LENGTH, "train")
 writer_train = SummaryWriter("runs/train")
-writer_train_eval = SummaryWriter("runs/train_eval")
-writer_valids = []
+# writer_train_eval = SummaryWriter("runs/train_eval")
+writer_valid = SummaryWriter("runs/validation")
+# writer_valids = []
 for split in scn.utils.download.VALID_SPLITS:
     filtered_raw_data = filter_dictionary_by_seq_length(filtered_raw_data, THRESHOLD_LENGTH, f'{split}')
-    writer_valids.append(SummaryWriter(f"runs/{split}"))
+#     writer_valids.append(SummaryWriter(f"runs/{split}"))
 data = prepare_dataloaders(
     filtered_raw_data,
     aggregate_model_input=True,
@@ -219,7 +230,7 @@ dl = iter(data['train'])
 #
 transformer = Seq2SeqTransformer(num_encoder_layers=NUM_ENCODER_LAYERS, num_decoder_layers=NUM_DECODER_LAYERS,
                                  emb_size=EMB_SIZE, src_vocab_size=SRC_VOCAB_SIZE, tgt_vocab_size=TGT_VOCAB_SIZE,
-                                 dim_feedforward=FFN_HID_DIM, num_head=NUM_HEAD)
+                                 dim_feedforward=FFN_HID_DIM, num_head=NUM_HEAD, activation='gelu', max_len=5000)
 
 # optimizer
 
@@ -234,7 +245,10 @@ loss_fn = torch.nn.MSELoss()
 optimizer = torch.optim.Adam(
     transformer.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9
 )
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
+# optimizer = torch.optim.RMSprop(
+#     transformer.parameters(), lr=0.01, alpha=0.99, eps=1e-08, weight_decay=0, momentum=0, centered=False
+# )
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=20, verbose=True, factor=0.75)
 
 prev_epoch = 0
 if os.path.exists(MODEL_PATH):
@@ -252,20 +266,24 @@ for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
     train_loss = train_epoch(transformer, iter(data['train']), optimizer)
     end_time = time.time()
 #    train_eval_loss = evaluate(transformer, iter(data['train-eval']))
-    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "  # Train eval loss: {train_eval_loss:.3f}, "
-           f"Epoch time = {(end_time - start_time):.3f}s"))
     valid_count = 0
+    val_loss_sum = 0
     for split in scn.utils.download.VALID_SPLITS:
         val_loss = evaluate(transformer, iter(data[f'{split}']))
-        writer_valids[valid_count].add_scalar("loss", val_loss, epoch)
-        writer_valids[valid_count].flush()
-        print(f"Epoch: {epoch}, {split} loss: {val_loss:.3f}")
+        # writer_valids[valid_count].add_scalar("loss", val_loss, epoch)
+        # writer_valids[valid_count].flush()
+        # print(f"Epoch: {epoch}, {split} loss: {val_loss:.3f}")
         valid_count += 1
+        val_loss_sum += val_loss
+    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, val loss: {val_loss_sum/valid_count:.3f}, "
+           f"Epoch time = {(end_time - start_time):.3f}s"))
     writer_train.add_scalar("loss", train_loss, epoch)
     writer_train.flush()
+    writer_valid.add_scalar("loss", val_loss_sum/valid_count, epoch)
+    writer_valid.flush()
     # writer_train_eval.add_scalar("loss", train_eval_loss, epoch)
     # writer_train_eval.flush()
-    scheduler.step(train_loss)
+    scheduler.step(val_loss_sum/valid_count)
     torch.save({
         'epoch': epoch,
         'model_state_dict': transformer.state_dict(),
@@ -279,10 +297,11 @@ for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'loss': train_loss,
-    }, f"model_{THRESHOLD_LENGTH}_{NUM_ENCODER_LAYERS}_{NUM_DECODER_LAYERS}_{FFN_HID_DIM}_{epoch}.pt")
+    }, f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}_{epoch}.pt")
 print('train ended')
 writer_train.close()
-valid_count = 0
-for split in scn.utils.download.VALID_SPLITS:
-    writer_valids[valid_count].close()
-    valid_count += 1
+writer_valid.close()
+# valid_count = 0
+# for split in scn.utils.download.VALID_SPLITS:
+#     writer_valids[valid_count].close()
+#     valid_count += 1
