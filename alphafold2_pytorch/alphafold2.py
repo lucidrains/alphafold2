@@ -823,7 +823,9 @@ class Alphafold2(nn.Module):
                 input_degrees = 2,
                 num_degrees = 2,
                 output_degrees = 1,
-                reversible = True
+                reversible = True,
+                tie_key_values = True,
+                one_headed_key_values = True
             )
         else:
             self.template_sidechain_emb = EnTransformer(
@@ -985,7 +987,9 @@ class Alphafold2(nn.Module):
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
                         adj_dim = 4,
-                        global_feats_dim = global_feats_dim
+                        global_feats_dim = global_feats_dim,
+                        tie_key_values = True,
+                        one_headed_key_values = True
                     )
                 else:
                     self.structure_module = EnTransformer(

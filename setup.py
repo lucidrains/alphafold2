@@ -22,7 +22,7 @@ setup(
     'performer-pytorch>=1.0.11',
     'proDy',
     'requests',
-    'se3-transformer-pytorch>=0.3.9',
+    'se3-transformer-pytorch>=0.5.1',
     'sidechainnet',
     'torch>=1.6',
     'transformers',
