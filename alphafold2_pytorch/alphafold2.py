@@ -196,6 +196,19 @@ def norm_shape(shape): # hack to squeeze out extra dimension for templates
         return torch.Size([shape[0], *shape[2:]])
     return shape
 
+def kron_operator(t, shape, mask = None, fn = torch.sum):
+    if exists(mask):
+        t = t.masked_fill_(~mask[..., None], 0.)
+
+    t = t.reshape(*shape)
+    t = torch.cat((fn(t, dim = 2), fn(t, dim = 1)), dim = 1)
+
+    if exists(mask):
+        mask = mask.reshape(*shape[:-1])
+        mask = torch.cat((mask.any(dim = 2), mask.any(dim = 1)), dim = 1)
+
+    return t, mask
+
 class KronInputWrapper(nn.Module):
     def __init__(
         self,
@@ -218,20 +231,10 @@ class KronInputWrapper(nn.Module):
             rotary_emb = None # turn off rotary embeddings if kron is being used, for now
 
         if self.kron_context:
-            context = context.reshape(*context_shape)
-            context = torch.cat((context.mean(dim = 2), context.mean(dim = 1)), dim = 1)
-
-            if exists(context_mask):
-                context_mask = context_mask.reshape(*context_shape[:-1])
-                context_mask = torch.cat((context_mask.any(dim = 2), context_mask.any(dim = 1)), dim = 1)
+            context, context_mask = kron_operator(context, context_shape, context_mask)
 
         if self.kron_queries:
-            x = x.reshape(*shape)
-            x = torch.cat((x.mean(dim = 2), x.mean(dim = 1)), dim = 1)
-
-            if exists(mask):
-                mask = mask.reshape(*shape[:-1])
-                mask = torch.cat((mask.any(dim = 2), mask.any(dim = 1)), dim = 1)
+            x, mask = kron_operator(x, shape, mask)
 
         out = self.fn(x, context, *args, mask = mask, context_mask = context_mask, rotary_emb = rotary_emb, **kwargs)
 
@@ -818,7 +821,8 @@ class Alphafold2(nn.Module):
         structure_module_adj_neighbors = 2,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
-        cross_attn_kron = False,
+        cross_attn_kron_primary = False,
+        cross_attn_kron_msa = False,
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
         structure_num_global_nodes = 0,
@@ -947,9 +951,9 @@ class Alphafold2(nn.Module):
                 cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
 
             layers.append(nn.ModuleList([
-                intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron))),
+                intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron_primary, kron_context = cross_attn_kron_msa))),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron))),
+                intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron_primary, kron_queries = cross_attn_kron_msa))),
                 prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
             ]))
 

@@ -93,7 +93,8 @@ def test_kron_cross_attn():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        cross_attn_kron = True
+        cross_attn_kron_primary = True,
+        cross_attn_kron_msa = True
     )
 
     seq = torch.randint(0, 21, (2, 128))
