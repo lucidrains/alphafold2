@@ -87,6 +87,28 @@ def test_msa_tie_row_attn():
     )
     assert True
 
+def test_kron_cross_attn():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        cross_attn_kron = True
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    msa = torch.randint(0, 21, (2, 5, 64))
+    mask = torch.ones_like(seq).bool()
+    msa_mask = torch.ones_like(msa).bool()
+
+    distogram = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+    assert True
+
 def test_templates():
     model = Alphafold2(
         dim = 32,
