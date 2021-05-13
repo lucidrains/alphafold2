@@ -14,17 +14,18 @@ from alphafold2_pytorch.utils import get_bucketed_distance_matrix
 from alphafold2_pytorch.transformer import Seq2SeqTransformer
 import time
 import os
+import matplotlib.pyplot as plt
 
 # constants
 
 DEVICE = None  # defaults to cuda if available, else cpu
-NUM_EPOCHS = int(1e3)
+NUM_EPOCHS = int(3e5)
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 3e-4
 IGNORE_INDEX = 21
 THRESHOLD_LENGTH = 50
-BATCH_SIZE = 128
+BATCH_SIZE = 250
 
 # transformer constants
 
@@ -33,11 +34,12 @@ TGT_VOCAB_SIZE = 3  # backbone torsion angle
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
 EMB_SIZE = 256
-NUM_HEAD = 16
+NUM_HEAD = 8
 FFN_HID_DIM = 128
-LOSS_WITHOUT_PADDING = True
+LOSS_WITHOUT_PADDING = False
 
 MODEL_PATH = f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}.pt"
+BEST_MODEL_PATH = MODEL_PATH
 # set device
 
 DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
@@ -109,51 +111,13 @@ def create_mask(src, tgt):
     return src_padding_mask, tgt_padding_mask
 
 
-def train_epoch(model, train_iter, optimizer):
+def train_epoch(model, train_iter, optimizer_, epoch):
     model.train()
     losses = 0
+    radian_diffs = torch.zeros(THRESHOLD_LENGTH*TGT_VOCAB_SIZE*BATCH_SIZE).to(DEVICE)
+    logits_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
+    angs_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
     for idx, (batch) in enumerate(train_iter):
-        seq, coords, angs, mask = batch.seqs, batch.crds, batch.angs, batch.msks
-
-        b, l, _ = seq.shape
-
-        # prepare mask, labels
-
-        seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
-            DEVICE).bool()
-        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
-        coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
-        if not LOSS_WITHOUT_PADDING:
-            angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
-        # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
-        mask = ~F.pad(mask, (0, THRESHOLD_LENGTH - l, 0, THRESHOLD_LENGTH - l), value=False)
-
-        # discretized_distances = get_bucketed_distance_matrix(coords[:, :, 1], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
-        src_padding_mask, tgt_padding_mask = create_mask(seq, seq)
-
-        # predict
-
-        logits = transformer(seq, seq, src_mask=mask,
-                             tgt_mask=mask, src_padding_mask=src_padding_mask,
-                             tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
-
-        optimizer.zero_grad()
-        # loss
-        if LOSS_WITHOUT_PADDING:
-            loss = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
-        else:
-            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
-        loss.backward()
-
-        optimizer.step()
-        losses += loss.item()
-    return losses / len(train_iter)
-
-
-def evaluate(model, val_iter):
-    model.eval()
-    losses = 0
-    for idx, (batch) in (enumerate(val_iter)):
         seq, coords, angs, mask = batch.seqs, batch.crds, batch.angs, batch.msks
 
         b, l, _ = seq.shape
@@ -174,18 +138,129 @@ def evaluate(model, val_iter):
 
         # predict
 
-        logits = transformer(seq, seq, src_mask=mask,
-                             tgt_mask=mask, src_padding_mask=src_padding_mask,
-                             tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
+        logits = model(seq, seq, src_mask=mask,
+                       tgt_mask=mask, src_padding_mask=src_padding_mask,
+                       tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
+
+        optimizer_.zero_grad()
+
+        mask1= mask.unsqueeze(2).expand(-1, -1, 3)
+        angs1 = torch.acos(torch.zeros(1)).item() * 4 * \
+                          (angs < -torch.acos(torch.zeros(1)).item() * 1.5) +\
+                          angs
+
+        angs2 = mask1 * angs1
+        logits2 = mask1 * logits
+        angs3 = angs2.reshape(-1, angs2.shape[-1])
+        logits3 = logits2.reshape(-1, logits2.shape[-1])
 
         # loss
-
         if LOSS_WITHOUT_PADDING:
-            loss = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+            loss_ = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+            diff = logits[:, :l, :].reshape(-1, logits.shape[-1]) - angs.reshape(-1, angs.shape[-1])
         else:
-            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+            loss_ = loss_fn(logits3, angs3)
+            diff = logits3 - angs3
+        radian_diff = torch.rad2deg(diff).reshape(-1)
+        radian_diffs += abs(radian_diff)
+        logits_avg += abs(torch.rad2deg(logits3)).reshape(-1)
+        angs_avg += abs(torch.rad2deg(angs3)).reshape(-1)
 
-        losses += loss.item()
+        # plt.plot(logits3.tolist(), label='logits')
+        if idx == 0 and epoch % 10 == 0:
+            plt.clf()
+            plt.plot(angs3[:, 0:1].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='phi')
+            plt.plot(logits3[:, 0:1].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='phi_logit')
+            plt.ylabel('angles')
+            plt.legend()
+            plt.savefig(f"./graph/train1_{epoch}_phi.png")
+            plt.clf()
+            plt.plot(angs3[:, 1:2].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='psi')
+            plt.plot(logits3[:, 1:2].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='psi_logit')
+            plt.ylabel('angles')
+            plt.legend()
+            plt.savefig(f"./graph/train1_{epoch}_psi.png")
+            plt.clf()
+            plt.plot(angs3[:, 2:3].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='omega')
+            plt.plot(logits3[:, 2:3].reshape(-1)[0:THRESHOLD_LENGTH].tolist(), label='omega_logit')
+            plt.ylabel('angles')
+            plt.legend()
+            plt.savefig(f"./graph/train1_{epoch}_omega.png")
+        # plt.plot(diff.tolist())
+
+
+        loss_.backward()
+
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        optimizer_.step()
+        losses += loss_.item()
+    radian_diffs = radian_diffs / len(train_iter)
+    logits_avg = logits_avg / len(train_iter)
+    angs_avg = angs_avg / len(train_iter)
+    # diff_dict = {str(i): string for i, string in enumerate(radian_diffs.tolist())}
+    # writer_train.add_scalars("train", diff_dict, epoch)
+    if epoch % 10 == 0:
+        plt.clf()
+        plt.plot(torch.mean(radian_diffs.reshape(THRESHOLD_LENGTH*TGT_VOCAB_SIZE, -1), 1).tolist(), label='diff')
+        plt.plot(torch.mean(logits_avg.reshape(THRESHOLD_LENGTH * TGT_VOCAB_SIZE, -1), 1).tolist(), label='logit')
+        plt.plot(torch.mean(angs_avg.reshape(THRESHOLD_LENGTH * TGT_VOCAB_SIZE, -1), 1).tolist(), label='ang')
+        plt.ylabel('angles')
+        plt.legend()
+        plt.savefig(f"./graph/train_{epoch}.png")
+    return losses / len(train_iter)
+
+
+def evaluate(model, val_iter):
+    model.eval()
+    losses = 0
+    radian_diffs = None  # torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
+    for idx, (batch) in (enumerate(val_iter)):
+        seq, coords, angs, mask = batch.seqs, batch.crds, batch.angs, batch.msks
+
+        b, l, _ = seq.shape
+        if radian_diffs is None:
+            radian_diffs = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * b).to(DEVICE)
+        # prepare mask, labels
+
+        seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
+            DEVICE).bool()
+        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
+        coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
+        if not LOSS_WITHOUT_PADDING:
+            angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
+        # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
+        mask = F.pad(mask, (0, THRESHOLD_LENGTH - l), value=False)
+
+        # discretized_distances = get_bucketed_distance_matrix(coords[:, :, 1], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
+        src_padding_mask, tgt_padding_mask = create_mask(seq, seq)
+
+        # predict
+
+        logits = model(seq, seq, src_mask=mask,
+                       tgt_mask=mask, src_padding_mask=src_padding_mask,
+                       tgt_padding_mask=tgt_padding_mask, memory_key_padding_mask=src_padding_mask)
+
+        angs_correction = torch.acos(torch.zeros(1)).item() * 4 * \
+                          (angs.reshape(-1, angs.shape[-1]) < -torch.acos(torch.zeros(1)).item() * 1.5) + \
+                          angs.reshape(-1, angs.shape[-1])
+
+        # loss
+        if LOSS_WITHOUT_PADDING:
+            loss_ = loss_fn(logits[:, :l, :].reshape(-1, logits.shape[-1]), angs.reshape(-1, angs.shape[-1]))
+            diff = logits[:, :l, :].reshape(-1, logits.shape[-1]) - angs.reshape(-1, angs.shape[-1])
+        else:
+            loss_ = loss_fn(logits.reshape(-1, logits.shape[-1]), angs_correction)
+            diff = logits.reshape(-1, logits.shape[-1]) - angs_correction
+        radian_diff = torch.rad2deg(diff).reshape(-1)
+        radian_diffs += abs(radian_diff)
+
+        losses += loss_.item()
+    radian_diffs = radian_diffs / len(val_iter)
+    # diff_dict = {str(i): string for i, string in enumerate(radian_diffs.tolist())}
+    # writer_train.add_scalars("train", diff_dict, epoch)
+    # plt.plot(torch.mean(radian_diffs.reshape(THRESHOLD_LENGTH * TGT_VOCAB_SIZE, -1), 1).tolist())
+    # plt.ylabel('angles')
+    # plt.savefig("valid.png")
     return losses / len(val_iter)
 
 
@@ -248,24 +323,40 @@ optimizer = torch.optim.Adam(
 # optimizer = torch.optim.RMSprop(
 #     transformer.parameters(), lr=0.01, alpha=0.99, eps=1e-08, weight_decay=0, momentum=0, centered=False
 # )
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=20, verbose=True, factor=0.75)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2000, verbose=True, factor=0.75)
 
 prev_epoch = 0
-if os.path.exists(MODEL_PATH):
-    checkpoint = torch.load(MODEL_PATH)
-    transformer.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    if 'scheduler_state_dict' in checkpoint:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    prev_epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    print(f"restore checkpoint. Epoch: {prev_epoch}, loss: {loss:.3f}")
+
+
+def restore_model(model_path, model, optimizer_):
+    prev_epoch_ = 0
+    loss_ = 1e10
+    valid_loss_ = 1e10
+    if os.path.exists(model_path):
+        checkpoint = torch.load(model_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer_.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        prev_epoch_ = checkpoint['epoch']
+        loss_ = checkpoint['loss']
+        if 'valid_loss' in checkpoint:
+            valid_loss_ = checkpoint['valid_loss']
+        print(f"restore checkpoint. Epoch: {prev_epoch_}, loss: {loss_:.3f}, valid_loss: {valid_loss_:.3f}")
+    return prev_epoch_, loss_, valid_loss_
+
+
+prev_epoch, loss, valid_loss = restore_model(MODEL_PATH, transformer, optimizer)
 # training loop
+best_valid = valid_loss if valid_loss < 1e10 else 1e10
+restore_epoch = 10
 for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
+    if epoch % restore_epoch == 0:
+        restore_model(BEST_MODEL_PATH, transformer, optimizer)
     start_time = time.time()
-    train_loss = train_epoch(transformer, iter(data['train']), optimizer)
+    train_loss = train_epoch(transformer, iter(data['train']), optimizer, epoch)
     end_time = time.time()
-#    train_eval_loss = evaluate(transformer, iter(data['train-eval']))
+    #    train_eval_loss = evaluate(transformer, iter(data['train-eval']))
     valid_count = 0
     val_loss_sum = 0
     for split in scn.utils.download.VALID_SPLITS:
@@ -275,29 +366,35 @@ for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
         # print(f"Epoch: {epoch}, {split} loss: {val_loss:.3f}")
         valid_count += 1
         val_loss_sum += val_loss
-    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, val loss: {val_loss_sum/valid_count:.3f}, "
+    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, val loss: {val_loss_sum / valid_count:.3f}, "
            f"Epoch time = {(end_time - start_time):.3f}s"))
     writer_train.add_scalar("loss", train_loss, epoch)
     writer_train.flush()
-    writer_valid.add_scalar("loss", val_loss_sum/valid_count, epoch)
+    writer_valid.add_scalar("loss", val_loss_sum / valid_count, epoch)
     writer_valid.flush()
     # writer_train_eval.add_scalar("loss", train_eval_loss, epoch)
     # writer_train_eval.flush()
-    scheduler.step(val_loss_sum/valid_count)
+    scheduler.step(val_loss_sum / valid_count)
     torch.save({
         'epoch': epoch,
         'model_state_dict': transformer.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'loss': train_loss,
+        'valid_loss': val_loss_sum / valid_count,
     }, MODEL_PATH)
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': transformer.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'loss': train_loss,
-    }, f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}_{epoch}.pt")
+    if val_loss_sum / valid_count < best_valid:
+        best_valid = val_loss_sum / valid_count
+        BEST_MODEL_PATH = f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}_{epoch}_{best_valid:.3f}.pt"
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': transformer.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'loss': train_loss,
+            'valid_loss': best_valid,
+        }, BEST_MODEL_PATH)
+        print(f"new best checkpoint. Epoch: {epoch}, loss: {train_loss:.3f}, valid_loss: {best_valid:.3f}")
 print('train ended')
 writer_train.close()
 writer_valid.close()
