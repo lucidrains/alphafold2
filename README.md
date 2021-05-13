@@ -299,6 +299,11 @@ model = Alphafold2(
 
 You can also apply the same operator to the MSAs during cross attention with the `cross_attn_kron_msa` flag, if your MSAs are aligned and of the same width.
 
+Todo
+
+- [ ] offer masked mean reduction method
+- [ ] rotary embeddings
+
 ## Memory Compressed Attention
 
 To save on memory for cross attention, you can set a compression ratio for the key / values, following the scheme laid out in <a href="https://arxiv.org/abs/1801.10198">this paper</a>. A compression ratio of 2-4 is usually acceptable.
