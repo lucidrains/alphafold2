@@ -180,7 +180,7 @@ class InterceptAttention(nn.Module):
                 mask = mask[slice_tuple]
                 mask = rearrange(mask, 'b ... -> b (...)')
 
-        attn_output = attn(x, c, *args, mask = mask, context_mask = context_mask, **kwargs)
+        attn_output = attn(x, c, *args, shape = shape, context_shape = context_shape, mask = mask, context_mask = context_mask, **kwargs)
 
         if context:
             return attn_output
@@ -188,6 +188,59 @@ class InterceptAttention(nn.Module):
         attn_output = attn_output.view(output_subset_shape)
         output[slice_tuple] = attn_output
         return rearrange(output, 'b ... d -> b (...) d')
+
+# kronecker attention wrapper
+
+def norm_shape(shape): # hack to squeeze out extra dimension for templates
+    if len(shape) == 5:
+        return torch.Size([shape[0], *shape[2:]])
+    return shape
+
+class KronInputWrapper(nn.Module):
+    def __init__(
+        self,
+        fn,
+        kron_queries = False,
+        kron_context = False
+    ):
+        super().__init__()
+        self.fn = fn
+        self.kron_queries = kron_queries
+        self.kron_context = kron_context
+
+    def forward(self, x, context, *args, shape = None, context_shape = None, mask = None, context_mask = None, rotary_emb = None, **kwargs):
+        assert not (self.kron_queries and not exists(shape)), 'shape for input must be given if queries are to be kroneckered'
+        assert not (self.kron_context and not exists(context_shape)), 'shape for context must be given if context are to be kroneckered'
+
+        shape, context_shape = map(norm_shape, (shape, context_shape))
+
+        if self.kron_queries or self.kron_context:
+            rotary_emb = None # turn off rotary embeddings if kron is being used, for now
+
+        if self.kron_context:
+            context = context.reshape(*context_shape)
+            context = torch.cat((context.mean(dim = 2), context.mean(dim = 1)), dim = 1)
+
+            if exists(context_mask):
+                context_mask = context_mask.reshape(*context_shape[:-1])
+                context_mask = torch.cat((context_mask.any(dim = 2), context_mask.any(dim = 1)), dim = 1)
+
+        if self.kron_queries:
+            x = x.reshape(*shape)
+            x = torch.cat((x.mean(dim = 2), x.mean(dim = 1)), dim = 1)
+
+            if exists(mask):
+                mask = mask.reshape(*shape[:-1])
+                mask = torch.cat((mask.any(dim = 2), mask.any(dim = 1)), dim = 1)
+
+        out = self.fn(x, context, *args, mask = mask, context_mask = context_mask, rotary_emb = rotary_emb, **kwargs)
+
+        if self.kron_queries:
+            out_h, out_w = out.split(shape[1:3], dim = 1)
+            out = rearrange(out_h, 'b h d -> b h () d') + rearrange(out_w, 'b w d -> b () w d')
+            out = rearrange(out, 'b ... d -> b (...) d')
+
+        return out
 
 # feed forward
 
@@ -765,6 +818,7 @@ class Alphafold2(nn.Module):
         structure_module_adj_neighbors = 2,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
+        cross_attn_kron = False,
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
         structure_num_global_nodes = 0,
@@ -893,9 +947,9 @@ class Alphafold2(nn.Module):
                 cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
 
             layers.append(nn.ModuleList([
-                intercept_fn(context = False, attn = prenorm_cross(cross_attn_fn())),
+                intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron))),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
+                intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron))),
                 prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
             ]))
 

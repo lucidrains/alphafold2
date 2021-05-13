@@ -280,6 +280,28 @@ model = Alphafold2(
 ).cuda()
 ```
 
+## Kronecker Attention for Cross Attention
+
+This <a href="https://arxiv.org/abs/2007.08442">paper</a> suggests that if you have queries or contexts that have defined axials (say an image), you can reduce the amount of attention needed by averaging across those axials (height and width) and concatenating the averaged axials into one sequence. You can turn this on as a memory saving technique for the cross attention, specifically for the primary sequence.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 6,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_kron = True # make sure primary sequence undergoes the kronecker operator during cross attention
+).cuda()
+```
+
+Todo
+
+- [ ] Handle MSAs, and uneven sequences
+- [ ] Make sure rotary embeddings still work
+
 ## Memory Compressed Attention
 
 To save on memory for cross attention, you can set a compression ratio for the key / values, following the scheme laid out in <a href="https://arxiv.org/abs/1801.10198">this paper</a>. A compression ratio of 2-4 is usually acceptable.
@@ -558,5 +580,19 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     eprint  = {2104.09864},
     archivePrefix = {arXiv},
     primaryClass = {cs.CL}
+}
+```
+
+```bibtex
+@article{Gao_2020,
+    title   = {Kronecker Attention Networks},
+    ISBN    = {9781450379984},
+    url     = {http://dx.doi.org/10.1145/3394486.3403065},
+    DOI     = {10.1145/3394486.3403065},
+    journal = {Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining},
+    publisher = {ACM},
+    author  = {Gao, Hongyang and Wang, Zhengyang and Ji, Shuiwang},
+    year    = {2020},
+    month   = {Jul}
 }
 ```
