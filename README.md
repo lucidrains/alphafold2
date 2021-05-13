@@ -293,7 +293,6 @@ model = Alphafold2(
     depth = 6,
     heads = 8,
     dim_head = 64,
-<<<<<<< HEAD
     cross_attn_kron_primary = True # make sure primary sequence undergoes the kronecker operator during cross attention
 ).cuda()
 ```
@@ -304,16 +303,6 @@ Todo
 
 - [ ] offer masked mean reduction method
 - [ ] rotary embeddings
-=======
-    cross_attn_kron = True # make sure primary sequence undergoes the kronecker operator during cross attention
-).cuda()
-```
-
-Todo
-
-- [ ] Handle MSAs, and uneven sequences
-- [ ] Make sure rotary embeddings still work
->>>>>>> 0676325... add KronInputWrapper, handle kronecker operator for primary sequence as both queries and context (cross attention)
 
 ## Memory Compressed Attention
 
