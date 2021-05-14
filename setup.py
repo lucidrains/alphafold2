@@ -28,7 +28,8 @@ setup(
     'transformers',
     'tqdm',
     'biopython',
-    'tensorboard'
+    'tensorboard',
+    'matplotlib'
   ],
   setup_requires=[
     'pytest-runner',

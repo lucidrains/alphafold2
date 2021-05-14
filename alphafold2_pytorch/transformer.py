@@ -25,7 +25,7 @@ from torch.nn import (TransformerEncoder, TransformerDecoder,
 class Seq2SeqTransformer(nn.Module):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward: int = 512, num_head: int = 8, dropout: float = 0.1, activation: str = "relu",
+                 dim_feedforward: int = 512, num_head: int = 8, dropout: float = 0.0, activation: str = "relu",
                  max_len: int = 5000):
         super(Seq2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_head,
