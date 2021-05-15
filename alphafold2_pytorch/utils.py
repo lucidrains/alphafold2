@@ -345,21 +345,11 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
     return token_reps
 
 
-def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
+def get_t5_embedd(seq, model_name="Rostlab/prot_t5_xl_uniref50", msa_data=None, device=None):
     """ Returns the ProtT5-XL-U50 embeddings for a protein.
         Inputs:
         * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
-        * tokenizer:  tokenizer model: T5Tokenizer
-        * model: encoder model: T5EncoderModel
-                 ex: from transformers import T5EncoderModel, T5Tokenizer
-                     model_name = "Rostlab/prot_t5_xl_uniref50"
-                     tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
-                     model = T5EncoderModel.from_pretrained(model_name)
-                     # prepare model 
-                     model = model.to(device)
-                     model = model.eval()
-                     if torch.cuda.is_available():
-                         model = model.half()
+        * model_name:  model name for embedding via transformers library.
         Outputs: tensor of (batch, n_seqs, L, embedd_dim)
             * n_seqs: number of sequences in the MSA. 1 for T5 models
             * embedd_dim: number of embedding dimensions. 1024 for T5 models
@@ -368,14 +358,20 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
     device = seq.device if device is None else device
     max_seq_len = seq.shape[-1]
     embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
-    
+
+    tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
+    model = T5EncoderModel.from_pretrained(model_name)
+    # prepare model 
+    model = model.to(device)
+    model = model.eval()
+    if torch.cuda.is_available():
+        model = model.half()
     # convert iteratively
     inputs_embedding = []
     shift_left, shift_right = 0, -1
     for sample in embedd_inputs:
         with torch.no_grad():
-            ids = tokenizer.batch_encode_plus([sample], add_special_tokens=True, padding=True, 
-                                                        is_split_into_words=True, return_tensors="pt")
+            ids = tokenizer.batch_encode_plus([sample], add_special_tokens=True, padding=True, is_split_into_words=True, return_tensors="pt")
             embedding = model(input_ids=ids['input_ids'].to(device))[0]
             inputs_embedding.append(embedding[0].detach()[shift_left:shift_right]) # .cpu().numpy()
     # return (batch, seq_len, embedd_dim)
@@ -1087,8 +1083,8 @@ def gdt_numpy(X, Y, cutoffs, weights=None):
 
 def tmscore_torch(X, Y):
     """ Assumes x,y are both (B x D x N). see below for wrapper. """
-    L = max(15, X.shape[-1])
-    d0 = 1.24 * (L - 15)**(1/3) - 1.8
+    L = X.shape[-1]
+    d0 = 1.24 * np.cbrt(L - 15) - 1.8
     # get distance
     dist = ((X - Y)**2).sum(dim=1).sqrt()
     # formula (see wrapper for source): 
@@ -1096,7 +1092,7 @@ def tmscore_torch(X, Y):
 
 def tmscore_numpy(X, Y):
     """ Assumes x,y are both (B x D x N). see below for wrapper. """
-    L = max(15, X.shape[-1])
+    L = X.shape[-1]
     d0 = 1.24 * np.cbrt(L - 15) - 1.8
     # get distance
     dist = np.sqrt( ((X - Y)**2).sum(axis=1) )
