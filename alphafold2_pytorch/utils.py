@@ -19,6 +19,9 @@ from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
 from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 
+# custom
+import mp_nerf
+
 # build vocabulary
 
 VOCAB = ProteinVocabulary()
@@ -573,39 +576,11 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
 
 
-def nerf_torch(a, b, c, l, theta, chi):
-    """ Custom Natural extension of Reference Frame. 
-        Inputs:
-        * a: (batch, 3) or (3,). point(s) of the plane, not connected to d
-        * b: (batch, 3) or (3,). point(s) of the plane, not connected to d
-        * c: (batch, 3) or (3,). point(s) of the plane, connected to d
-        * theta: (batch,) or (float).  angle(s) between b-c-d
-        * chi: (batch,) or float. dihedral angle(s) between the a-b-c and b-c-d planes
-        Outputs: d (batch, 3) or (3,). the next point in the sequence, linked to c
-    """
-    # safety check
-    if not ( (-np.pi <= theta) * (theta <= np.pi) ).all().item():
-        raise ValueError(f"theta(s) must be in radians and in [-pi, pi]. theta(s) = {theta}")
-    # calc vecs
-    ba = b-a
-    cb = c-b
-    # calc rotation matrix. based on plane normals and normalized
-    n_plane  = torch.cross(ba, cb, dim=-1)
-    n_plane_ = torch.cross(n_plane, cb, dim=-1)
-    rotate   = torch.stack([cb, n_plane_, n_plane], dim=-1)
-    rotate  /= torch.norm(rotate, dim=-2, keepdim=True)
-    # calc proto point, rotate
-    d = torch.stack([-torch.cos(theta),
-                      torch.sin(theta) * torch.cos(chi),
-                      torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
-    # extend base point, set length
-    return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
-
-def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
-                        n_atoms=NUM_COORDS_PER_RES, padding=GLOBAL_PAD_CHAR):
+def sidechain_container(seqs, backbones, n_aa, cloud_mask=None):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
+        * seqs: (batch, L) either tensor or list
         * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
                     Coords for (N-term, C-alpha, C-term) of every aa.
         * n_aa: int. number of points for each aa in the backbones.
@@ -619,60 +594,63 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
     """
     device = backbones.device
     batch, length = backbones.shape[0], backbones.shape[1] // n_aa
-    # build scaffold from (N, CA, C, CB)
-    new_coords = torch.zeros(batch, length, n_atoms, 3).to(device)
+    # build scaffold from (N, CA, C, CB) - do in cpu
+    new_coords = torch.zeros(batch, length, n_atoms, 3)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
-    with torch.autograd.set_detect_anomaly(True):
-        # set backbone positions and coords before computing angles
-        new_coords[:, :, :3] = predicted[:, :, :3]
-        seq_coords = new_coords.detach()
+    predicted  = predicted.cpu() if predicted.is_cuda else predicted
 
-        # hard-calculate oxygen position of carbonyl (=O) group with parallel version of NERF
-        # if place_oxygen: # deafults true. 
-        ## could init oxygen to carbonyl : new_coords[:, :, 3] = predicted[:, :, 2]
-        for s in range(batch):
-            # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
-            # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-            seq_bb = backbones[s].detach()
-            psis = torch.stack([ get_dihedral_torch(*seq_bb[i*3 + 0 : i*3 + 4] ) \
-                                 if i < length-1 else torch.tensor(np.pi*5/4).to(backbones.device) \
-                                  for i in range(length) ])
-            # the angle for placing oxygen is opposite to psi of current res.
-            # psi not available for last one so pi/4 taken for now
-            bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
-            bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
-            correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
-            
-            new_coords[s:s+1, :, 3] = nerf_torch(seq_coords[s:s+1, :, 0], 
-                                                 seq_coords[s:s+1, :, 1],
-                                                 seq_coords[s:s+1, :, 2],
-                                                 bond_lens, bond_angs, psis + correction)
+    # fill backbone (N, C_alpha, C)
+    if n_aa <= 3:
+        new_coords[:, :, :n_aa] = predicted
+    # fill backbone (N, C_alpha, C, C_beta)
+    elif n_aa == 4:
+        new_coords[:, :, :n_aa] = predicted[:, :, :-1]
+        new_coords[:, :, 4] = predicted[:, :, -1]
+    # do all
+    else: 
+        return predicted
 
-            # init cb to predicted pos or to hardcoded one
-            # analysis of cb param distros in mp_nerf paper has shown the following estimates (mu/std)
-            # dihedral (C_{-1}-N-CA-CB): (1.72/1.64), bond_length: (1.526/1.2e-07), anngle (N-CA-CB): (1.9146/0)
+    for s,seq in enumerate(seqs): 
+        # get scaffolds
+        padding = (seq == 20).sum().item()
+        seq_str = ''.join([VOCAB.int2char_[aa] for aa in seq.cpu().numpy()[:-padding or None]])
+        scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, device="cpu")
+        coords = new_coords.detach()[:-padding or None]
 
-            # set cb to predicted or predict by nerf (init first as c_alpha)
-            if n_aa == 4:
-                new_coords[s:s+1, :, 4] = predicted[s:s+1, :, -1]
-            else: 
-                l = new_coords.shape[1]
-                new_coords[s:s+1, :, 4] = predicted[s:s+1, :, 1].clone()
-                new_coords[s:s+1, 1:, 4] = nerf_torch(seq_coords[s:s+1, :-1, 2].clone(), 
-                                                      seq_coords[s:s+1, 1:, 0].clone(), 
-                                                      seq_coords[s:s+1, 1:, 1].clone(), 
-                                                      torch.tensor([[1.526]*l]).to(device), 
-                                                      torch.tensor([[1.9146]*l]).to(device), 
-                                                      torch.tensor([[1.72]*l]).to(device))
+        for i in range(3,14):
+            # skip c_beta if already done
+            if n_aa == i == 4:
+                continue
 
-            # set rest of positions to a small random in the (cb-ca) direction + cbeta
-            new_coords[s:s+1, :, 5:] = repeat(new_coords[s:s+1, :, 4].detach() - seq_coords[s:s+1, :, 1], 
-                                              'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
-            new_coords[s:s+1, :, 5:] += .25*torch.rand_like( seq_coords[s:s+1, :, 5:] )
-            new_coords[s:s+1, :, 5:] *=   4*torch.rand_like( seq_coords[s:s+1, :, 5:, :1] )
-            new_coords[s:s+1, :, 5:] += repeat(seq_coords[s:s+1, :, 4], 
-                                               'b l d -> b l scn_wo_cb d', scn_wo_cb=9)
+            level_mask = scaffolds["cloud_mask"][:, i]
+            # thetas, dihedrals = angles_mask[:, level_mask, i]
+            idx_a, idx_b, idx_c = scaffolds["point_ref_mask"][:, level_mask, i-3]
 
+            # to place C-beta, we need the carbons from prev res - not available for the 1st res
+            if i == 4:
+                # for 1st residue, use position of the second residue's N
+                first_next_n     = coords[1, :1] # 1, 3
+                # the c requested is from the previous residue - offset boolean mask by one
+                # can't be done with slicing bc glycines are inside chain (dont have cb)
+                main_c_prev_idxs = coords[(level_mask.nonzero().view(-1) - 1), idx_a][1:] # (L-1), 3
+                # concat coords
+                coords_a = torch.cat([first_next_n, main_c_prev_idxs])
+            else:
+                coords_a = coords[level_mask, idx_a]
+
+            coords[level_mask, i] = mp_nerf.mp_nerf_torch(coords_a, 
+                                                          coords[level_mask, idx_b],
+                                                          coords[level_mask, idx_c],
+                                                          scaffolds["bond_mask"][level_mask, i], 
+                                                          *scaffolds["angles_mask"][:, level_mask, i])
+            # add back
+            if n_aa <=3: 
+                new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]
+            elif n_aa == 4:
+                new_coords[s, :-padding or None, 5:] = coords[:, 5:]
+                new_coords[s, :-padding or None, 3] = predicted[:, 3]
+
+        new_coords = new_coords.to(device)
         if cloud_mask is not None:
             new_coords[torch.logical_not(cloud_mask)] = 0.
 
@@ -680,7 +658,6 @@ def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
         nan_mask = torch.nonzero(new_coords!=new_coords, as_tuple=True)
         new_coords[new_coords!=new_coords] = 0.
         return new_coords
-
 
 
 # distance utils (distogram to dist mat + masking)

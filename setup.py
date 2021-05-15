@@ -28,7 +28,8 @@ setup(
     'torch>=1.6',
     'transformers',
     'tqdm',
-    'biopython'
+    'biopython',
+    'mp-nerf'
   ],
   setup_requires=[
     'pytest-runner',
