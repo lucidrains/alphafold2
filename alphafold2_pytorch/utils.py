@@ -110,7 +110,7 @@ def get_atom_ids_dict():
 
 def make_cloud_mask(aa):
     """ relevent points will be 1. paddings will be 0. """
-    mask = np.zeros(14)
+    mask = np.zeros(constants.NUM_COORDS_PER_RES)
     # early stop if padding token
     if aa == "_":
         return mask
@@ -121,7 +121,7 @@ def make_cloud_mask(aa):
 
 def make_atom_id_embedds(aa, atom_ids):
     """ Return the tokens for each atom in the aa. """
-    mask = np.zeros(14)
+    mask = np.zeros(constants.NUM_COORDS_PER_RES)
     # early stop if padding token
     if aa == "_":
         return mask
@@ -426,7 +426,7 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     scn_seq = expand_dims_to(scn_seq, 2 - len(scn_seq.shape))
     # early check for coords mask
     if coords is not None: 
-        batch_mask = ( rearrange(coords, '... (l c) d -> ... l c d', c=14) == 0 ).sum(dim=-1) < coords.shape[-1]
+        batch_mask = ( rearrange(coords, '... (l c) d -> ... l c d', c=constants.NUM_COORDS_PER_RES) == 0 ).sum(dim=-1) < coords.shape[-1]
         if boolean:
             return batch_mask.bool()
         else: 
@@ -576,27 +576,29 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
 
 
-def sidechain_container(seqs, backbones, n_aa, cloud_mask=None):
+def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
         * seqs: (batch, L) either tensor or list
-        * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
-                    Coords for (N-term, C-alpha, C-term) of every aa.
+        * backbones: (batch, L*n_aa, 3): assume batch=1 (could be extended (?not tested)).
+                     Coords for (N-term, C-alpha, C-term, (c_beta)) of every aa.
         * n_aa: int. number of points for each aa in the backbones.
         * cloud_mask: (batch, l, c). optional. cloud mask from scn_cloud_mask`.
-                      returns point outside to 0. if passed, else c_alpha
-        * place_oxygen: whether to claculate the oxygen of the
-                        carbonyl group via NeRF
-        * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
-        * padding: int. padding token. same as in sidechainnet: 0
-        Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
+                      sets point outside of mask to 0. if passed, else c_alpha
+        * padding: int. padding token. same as in sidechainnet: 20
+        Outputs: whole coordinates of shape (batch, L, 14, 3)
     """
     device = backbones.device
     batch, length = backbones.shape[0], backbones.shape[1] // n_aa
-    # build scaffold from (N, CA, C, CB) - do in cpu
-    new_coords = torch.zeros(batch, length, n_atoms, 3)
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
+
+    # early check if whole chain is already pred
+    if n_aa > 4:
+        return predicted
+
+    # build scaffold from (N, CA, C, CB) - do in cpu
+    new_coords = torch.zeros(batch, length, constants.NUM_COORDS_PER_RES, 3)
     predicted  = predicted.cpu() if predicted.is_cuda else predicted
 
     # fill backbone (N, C_alpha, C)
@@ -604,60 +606,40 @@ def sidechain_container(seqs, backbones, n_aa, cloud_mask=None):
         new_coords[:, :, :n_aa] = predicted
     # fill backbone (N, C_alpha, C, C_beta)
     elif n_aa == 4:
-        new_coords[:, :, :n_aa] = predicted[:, :, :-1]
+        new_coords[:, :, :3] = predicted[:, :, :-1]
         new_coords[:, :, 4] = predicted[:, :, -1]
-    # do all
-    else: 
-        return predicted
 
+    # generate sidechain
     for s,seq in enumerate(seqs): 
+        # format seq accordingly
+        if isinstance(seq, torch.Tensor):
+            padding = (seq == padding_tok).sum().item()
+            seq_str = ''.join([VOCAB._int2char[aa] for aa in seq.cpu().numpy()[:-padding or None]])
+        elif isinstance(seq, str):
+            padding = 0
+            seq_str = seq
         # get scaffolds
-        padding = (seq == 20).sum().item()
-        seq_str = ''.join([VOCAB.int2char_[aa] for aa in seq.cpu().numpy()[:-padding or None]])
-        scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, device="cpu")
-        coords = new_coords.detach()[:-padding or None]
+        scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, angles=None, device="cpu")
+        coords, _ = mp_nerf.proteins.sidechain_fold(wrapper = new_coords[s, :-padding or None].detach(),
+                                                    **scaffolds, c_beta = n_aa!=4)
+        # add detached scn
+        if n_aa <=3: 
+            new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]
+        # add detachyed scn and =O, but not cbeta    
+        elif n_aa == 4: 
+            new_coords[s, :-padding or None, 5:] = coords[:, 5:]
+            new_coords[s, :-padding or None, 3] = coords[:, 3]
 
-        for i in range(3,14):
-            # skip c_beta if already done
-            if n_aa == i == 4:
-                continue
+    new_coords = new_coords.to(device)
+    if cloud_mask is not None:
+        new_coords[torch.logical_not(cloud_mask)] = 0.
 
-            level_mask = scaffolds["cloud_mask"][:, i]
-            # thetas, dihedrals = angles_mask[:, level_mask, i]
-            idx_a, idx_b, idx_c = scaffolds["point_ref_mask"][:, level_mask, i-3]
-
-            # to place C-beta, we need the carbons from prev res - not available for the 1st res
-            if i == 4:
-                # for 1st residue, use position of the second residue's N
-                first_next_n     = coords[1, :1] # 1, 3
-                # the c requested is from the previous residue - offset boolean mask by one
-                # can't be done with slicing bc glycines are inside chain (dont have cb)
-                main_c_prev_idxs = coords[(level_mask.nonzero().view(-1) - 1), idx_a][1:] # (L-1), 3
-                # concat coords
-                coords_a = torch.cat([first_next_n, main_c_prev_idxs])
-            else:
-                coords_a = coords[level_mask, idx_a]
-
-            coords[level_mask, i] = mp_nerf.mp_nerf_torch(coords_a, 
-                                                          coords[level_mask, idx_b],
-                                                          coords[level_mask, idx_c],
-                                                          scaffolds["bond_mask"][level_mask, i], 
-                                                          *scaffolds["angles_mask"][:, level_mask, i])
-            # add back
-            if n_aa <=3: 
-                new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]
-            elif n_aa == 4:
-                new_coords[s, :-padding or None, 5:] = coords[:, 5:]
-                new_coords[s, :-padding or None, 3] = predicted[:, 3]
-
-        new_coords = new_coords.to(device)
-        if cloud_mask is not None:
-            new_coords[torch.logical_not(cloud_mask)] = 0.
-
-        # replace any nan-s with previous point location: 
-        nan_mask = torch.nonzero(new_coords!=new_coords, as_tuple=True)
-        new_coords[new_coords!=new_coords] = 0.
-        return new_coords
+    # replace any nan-s with previous point location (or N if pos is 13th of AA)
+    nan_mask = list(torch.nonzero(new_coords!=new_coords, as_tuple=True))
+    new_coords[nan_mask[0], nan_mask[1], nan_mask[2]] = new_coords[nan_mask[0], 
+                                                                   nan_mask[1],
+                                                                   (nan_mask[-2]+1) % new_coords.shape[-1]] 
+    return new_coords.to(device)
 
 
 # distance utils (distogram to dist mat + masking)

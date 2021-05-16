@@ -68,8 +68,9 @@ def test_nerf_and_dihedral():
     assert get_dihedral_torch(a, b, c, d).item() == chi
 
 def test_sidechain_container():
+    seqs = torch.tensor([[0]*137, [3]*137]).long()
     bb = torch.randn(2, 137*4, 3)
-    proto_3d = sidechain_container(bb, n_aa=4, place_oxygen=True)
+    proto_3d = sidechain_container(seqs, bb, n_aa=4)
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 
