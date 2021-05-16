@@ -292,7 +292,7 @@ def test_edges_to_equivariant_network():
         depth = 1,
         heads = 2,
         dim_head = 32,
-        use_se3_transformer = False,
+        structure_module_type = "en",
         predict_coords = True,
         predict_angles = True,
         num_backbone_atoms = 3
@@ -381,7 +381,7 @@ def test_coords_En():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        use_se3_transformer = False,
+        structure_module_type = "en",
         predict_coords = True,
         num_backbone_atoms = 3
     )
@@ -417,7 +417,7 @@ def test_coords_En_backwards():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        use_se3_transformer = False,
+        structure_module_type = "en",
         predict_coords = True,
         num_backbone_atoms = 3
     )
@@ -445,7 +445,7 @@ def test_confidence_En():
         depth = 1,
         heads = 2,
         dim_head = 32,
-        use_se3_transformer = False,
+        structure_module_type = "en",
         predict_coords = True,
         num_backbone_atoms = 3
     )

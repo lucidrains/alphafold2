@@ -97,7 +97,7 @@ model = Alphafold2(
     heads = 8,
     dim_head = 64,
     predict_coords = True,
-    use_se3_transformer = True,             # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
+    structure_module_type = 'se3',          # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
     num_backbone_atoms = 3,                 # C, Ca, N coordinates
     structure_module_dim = 4,               # se3 transformer dimension
     structure_module_depth = 1,             # depth
@@ -195,7 +195,7 @@ model = Alphafold2(
     dim_head = 64,
     predict_coords = True,
     predict_real_value_distances = True,      # set this to True
-    use_se3_transformer = True,
+    structure_module_type = 'se3',
     num_backbone_atoms = 3,
     structure_module_dim = 4,
     structure_module_depth = 1,
@@ -424,7 +424,7 @@ There are two equivariant self attention libraries that I have prepared for the 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 - <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
 
-A new paper from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `use_se3_transformer = False` on Alphafold2 initialization.
+A new paper from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `structure_module_type = "en"` on Alphafold2 initialization.
 
 - <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
 

@@ -811,7 +811,8 @@ class Alphafold2(nn.Module):
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
         return_aux_logits = False,
-        use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
+        template_embedder_type = 'en',         # use E(n) Transformer for embedding templates
+        structure_module_type = 'se3',         # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -869,9 +870,9 @@ class Alphafold2(nn.Module):
 
         # template sidechain encoding
 
-        self.use_se3_transformer = use_se3_transformer
+        self.template_embedder_type = template_embedder_type
 
-        if use_se3_transformer:
+        if template_embedder_type == 'se3':
             self.template_sidechain_emb = SE3TemplateEmbedder(
                 dim = dim,
                 dim_head = dim,
@@ -886,7 +887,7 @@ class Alphafold2(nn.Module):
                 one_headed_key_values = True,
                 num_positions = max_seq_len
             )
-        else:
+        elif template_embedder_type == 'en':
             self.template_sidechain_emb = EnTransformer(
                 dim = dim,
                 dim_head = dim,
@@ -894,6 +895,8 @@ class Alphafold2(nn.Module):
                 neighbors = 32,
                 depth = 4
             )
+        else:
+            raise ValueError('template embedder type must be either "se3" or "en"')
 
         # custom embedding projection
 
@@ -1008,7 +1011,7 @@ class Alphafold2(nn.Module):
         self.structure_num_global_nodes = structure_num_global_nodes
 
         if structure_num_global_nodes > 0:
-            assert use_se3_transformer, 'se3 transformer must be used in order to use global node token feature'
+            assert structure_module_type == 'se3', 'se3 transformer must be used in order to use global node token feature'
             self.global_queries = nn.Parameter(torch.randn(structure_num_global_nodes, dim))
             self.global_pool_attns.append(Attention(dim = dim))
             global_feats_dim = dim
@@ -1032,7 +1035,7 @@ class Alphafold2(nn.Module):
                 self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
                 self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
 
-                if use_se3_transformer:
+                if structure_module_type == 'se3':
                     self.structure_module = SE3TransformerWrapper(
                         dim = structure_module_dim,
                         depth = structure_module_depth,
@@ -1051,7 +1054,7 @@ class Alphafold2(nn.Module):
                         one_headed_key_values = True,
                         num_positions = max_seq_len * 14 # hard code as 14 since residual to atom is not flexible atm
                     )
-                else:
+                elif structure_module_type == 'en':
                     self.structure_module = EnTransformer(
                         dim = structure_module_dim,
                         depth = structure_module_depth,
@@ -1063,6 +1066,8 @@ class Alphafold2(nn.Module):
                         num_adj_degrees = structure_module_adj_neighbors,
                         adj_dim = 4
                     )
+                else:
+                    raise ValueError('structure module must be either "se3", "en", or "egnn" for SE3 Transformers, E(n)-Transformers, or EGNN respectively')
 
         # aux confidence measure
         self.lddt_linear = nn.Linear(structure_module_dim, 1)
