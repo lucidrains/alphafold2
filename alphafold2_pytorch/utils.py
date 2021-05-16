@@ -366,21 +366,21 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
     """
     # get params and prepare
     device = seq.device if device is None else device
-    max_seq_len = seq.shape[-1]
-    embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
+    embedd_inputs = ids_to_prottran_input(seq.cpu().tolist())
     
-    # convert iteratively
+    # embedd - https://huggingface.co/Rostlab/prot_t5_xl_uniref50
     inputs_embedding = []
     shift_left, shift_right = 0, -1
-    for sample in embedd_inputs:
-        with torch.no_grad():
-            ids = tokenizer.batch_encode_plus([sample], add_special_tokens=True, padding=True, 
-                                                        is_split_into_words=True, return_tensors="pt")
-            embedding = model(input_ids=ids['input_ids'].to(device))[0]
-            inputs_embedding.append(embedding[0].detach()[shift_left:shift_right]) # .cpu().numpy()
+    ids = tokenizer.batch_encode_plus(embedd_inputs, add_special_tokens=True,
+                                                     padding=True, 
+                                                     return_tensors="pt")
+    with torch.no_grad():
+        embedding = model(input_ids=torch.tensor(ids['input_ids']).to(device), 
+                          attention_mask=torch.tensor(ids["attention_mask"]).to(device),
+                          decoder_input_ids=None)
     # return (batch, seq_len, embedd_dim)
-    token_reps = torch.stack(inputs_embedding, dim=0)
-    return token_reps
+    token_reps = embedding.last_hidden_state[:, shift_left:shift_right]
+    return token_reps.to(device)
 
 
 def get_all_protein_ids(dataloader, verbose=False):
@@ -486,6 +486,73 @@ def scn_atom_embedd(scn_seq):
                                            for aa in seq]) )
     batch_tokens = torch.stack(batch_tokens, dim=0).long().to(device)
     return batch_tokens
+
+def mat_input_to_masked(x, x_mask=None, edges_mat=None, edges=None, 
+                          edge_mask=None, edge_attr_mat=None, 
+                          edge_attr=None): 
+    """ Turns the padded input and edges + mask into the
+        non-padded inputs and edges.
+        At least one of (edges_mat, edges) must be provided. 
+        The same format for edges and edge_attr must be provided 
+        (either adj matrix form or flattened form).
+        Inputs: 
+        * x: ((batch), N, D) a tensor of N nodes and D dims for each one
+        * x_mask: ((batch), N,) boolean mask for x
+        * edges: (2, E) optional. indices of the corresponding adjancecy matrix. 
+        * edges_mat: ((batch), N, N) optional. adjacency matrix for x
+        * edge_mask: optional. boolean mask of the same shape of either "edge_mat" or "edges".
+        * edge_attr: (E, D_edge) optional. edge attributes of D_edge dims.
+        * edge_attr_mat: ((batch), N, N) optional. adjacency matrix with features 
+        Outputs: 
+        * x: (N_, D) the masked node features
+        * edge_index: (2, E_) the masked x-indices for the edges
+        * edge_attr: (E_, D_edge) the masked edge attributes 
+        * batch: (N_,) the corresponding index in the batch for each node 
+    """
+    # collapse batch dimension
+    if len(x.shape) == 3:
+        batch_dim = x.shape[1] 
+        # collapse for x and its mask
+        x = rearrange(x, 'b n d ... -> (b n) d ...')
+        if x_mask is not None:
+            x_mask = rearrange(x_mask, 'b n ... -> (b n) ...')
+        else: 
+            x_mask = torch.ones_like(x[..., 0]).bool()
+
+        # collapse for edge indexes and attributes if needed
+        if edges_mat is not None and edges is None:
+            edges = torch.nonzero(edges_mat, as_tuple=False).t()
+            edges = edges[1:] + edges[:1]*batch_dim
+        # get the batch identifier for each node
+        batch = (torch.arange(x.shape[0]) // batch_dim)[x_mask]
+    else:
+        # edges to indices format
+        if edges_mat is not None and edges is None:
+            edges = torch.nonzero(edges_mat, as_tuple=False).t()
+        # get the batch identifier for each node
+        batch = torch.zeros(x.shape[0]).to(x.device)
+
+    # adapt edge attrs if provided
+    if edge_attr_mat is not None and edge_attr is None: 
+            edge_attr = edge_attr[edges_mat.bool()]
+    # gen edge_mask if not provided
+    if edge_mask is None:
+        edge_mask = torch.ones_like(edges[-1]).bool()
+
+    # begin applying masks
+    x = x[x_mask]
+    # process edge indexes: get square mat and remove all non-coding atoms
+    max_num = edges.max().item()+1
+    wrapper = torch.zeros(max_num, max_num).to(x.device)
+    wrapper[edges[0][edge_mask], edges[1][edge_mask]] = 1
+    wrapper = wrapper[x_mask, :][:, x_mask]
+    edge_index = torch.nonzero(wrapper, as_tuple=False).t()
+    # process edge attr
+    edge_attr = edge_attr[edge_mask] if edge_attr is not None else None
+    
+    return x, edge_index, edge_attr, batch
+
+
 
 def nth_deg_adjacency(adj_mat, n=1, sparse=False):
     """ Calculates the n-th degree adjacency matrix.
