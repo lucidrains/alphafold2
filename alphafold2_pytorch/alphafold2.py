@@ -883,14 +883,15 @@ class Alphafold2(nn.Module):
                 output_degrees = 1,
                 reversible = True,
                 tie_key_values = True,
-                one_headed_key_values = True
+                one_headed_key_values = True,
+                num_positions = max_seq_len
             )
         else:
             self.template_sidechain_emb = EnTransformer(
                 dim = dim,
                 dim_head = dim,
                 heads = 1,
-                num_nearest_neighbors = 32,
+                neighbors = 32,
                 depth = 4
             )
 
@@ -1047,15 +1048,16 @@ class Alphafold2(nn.Module):
                         adj_dim = 4,
                         global_feats_dim = global_feats_dim,
                         tie_key_values = True,
-                        one_headed_key_values = True
+                        one_headed_key_values = True,
+                        num_positions = max_seq_len * 14 # hard code as 14 since residual to atom is not flexible atm
                     )
                 else:
                     self.structure_module = EnTransformer(
                         dim = structure_module_dim,
                         depth = structure_module_depth,
                         heads = structure_module_heads,
-                        fourier_features = 2,
-                        num_nearest_neighbors = 0,
+                        rel_pos_emb = True,
+                        neighbors = 0,
                         only_sparse_neighbors = True,
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
