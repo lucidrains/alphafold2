@@ -550,11 +550,14 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
     for s,seq in enumerate(seq_list): 
         next_idx = 0
         for i,idx in enumerate(seq):
-            # offset by pos in chain ( intra-aa bonds + with next aa )
             aa_bonds = constants.AA_DATA[VOCAB._int2char[idx]]['bonds']
+            # if no edges -> padding token -> finish bond creation for this seq
+            if len(aa_bonds) == 0: 
+                break
             # correct next position. for indexes functionality
             if mat:
                 next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
+            # offset by pos in chain ( intra-aa bonds + with next aa )
             bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
             next_idx += next_aa
             # delete link with next if final AA in seq
