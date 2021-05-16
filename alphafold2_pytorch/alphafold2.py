@@ -700,6 +700,7 @@ class CoordModuleMDS(nn.Module):
     def forward(
         self,
         *,
+        seq,
         distance_pred,
         trunk_embeds,
         N_mask,
@@ -734,7 +735,7 @@ class CoordModuleMDS(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(coords, n_aa = num_backbone_atoms, cloud_mask = cloud_mask)
+        coords = sidechain_container(seq, coords, n_aa = num_backbone_atoms, cloud_mask = cloud_mask)
         coords = rearrange(coords, 'b n l d -> b (n l) d')
 
         return coords
@@ -1312,6 +1313,7 @@ class Alphafold2(nn.Module):
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
         coords = self.trunk_to_coords(
+            seq = seq, 
             distance_pred = distance_pred,
             trunk_embeds = trunk_embeds,
             N_mask = N_mask,
