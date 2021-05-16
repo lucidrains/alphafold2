@@ -20,6 +20,7 @@ from alphafold2_pytorch.rotary import DepthWiseConv1d, AxialRotaryEmbedding, Fix
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
+from egnn_pytorch import EGNN_Network
 
 from performer_pytorch import FastAttention, ProjectionUpdater
 
@@ -820,6 +821,7 @@ class Alphafold2(nn.Module):
         structure_module_refinement_iters = 2,
         structure_module_knn = 2,
         structure_module_adj_neighbors = 2,
+        structure_module_adj_dim = 4,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
         cross_attn_kron_primary = False,
@@ -1048,7 +1050,7 @@ class Alphafold2(nn.Module):
                         attend_sparse_neighbors = True,
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
-                        adj_dim = 4,
+                        adj_dim = structure_module_adj_dim,
                         global_feats_dim = global_feats_dim,
                         tie_key_values = True,
                         one_headed_key_values = True,
@@ -1065,6 +1067,15 @@ class Alphafold2(nn.Module):
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
                         adj_dim = 4
+                    )
+                elif structure_module_type == 'egnn':
+                    self.structure_module = EGNN_Network(
+                        dim = structure_module_dim,
+                        depth = structure_module_depth,
+                        num_positions = max_seq_len * 14, # hard code as 14 since residual to atom is not flexible atm
+                        edge_dim = edge_dim,
+                        num_adj_degrees = structure_module_adj_neighbors,
+                        adj_dim = structure_module_adj_dim,
                     )
                 else:
                     raise ValueError('structure module must be either "se3", "en", or "egnn" for SE3 Transformers, E(n)-Transformers, or EGNN respectively')

@@ -85,7 +85,7 @@ distogram, theta, phi, omega = model(
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
 
-You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> for the refinement, if you are in the experimental mood (paper just came out a week ago).
+You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> or <a href="https://github.com/lucidrains/egnn-pytorch">EGNN</a> for structural refinement.
 
 ```python
 import torch
@@ -422,11 +422,13 @@ distogram = model(
 There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
 
 - <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
-- <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
+- <a href="https://github.com/lucidrains/egnn-pytorch">Lie Transformer</a>
 
-A new paper from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `structure_module_type = "en"` on Alphafold2 initialization.
+A <a href="https://arxiv.org/abs/2102.09844">new paper</a> from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `structure_module_type = "egnn"` or `structure_module_type = "en"` on Alphafold2 initialization.
 
 - <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
+
+- <a href="https://github.com/lucidrains/En-transformer">EGNN</a>
 
 ## Testing
 
