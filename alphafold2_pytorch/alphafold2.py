@@ -1076,6 +1076,7 @@ class Alphafold2(nn.Module):
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
                         adj_dim = structure_module_adj_dim,
+                        coor_weights_clamp_value = 2.
                     )
                 else:
                     raise ValueError('structure module must be either "se3", "en", or "egnn" for SE3 Transformers, E(n)-Transformers, or EGNN respectively')
