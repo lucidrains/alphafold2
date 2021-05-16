@@ -110,12 +110,13 @@ def test_kron_cross_attn():
     )
     assert True
 
-def test_templates():
+def test_templates_se3():
     model = Alphafold2(
         dim = 32,
         depth = 2,
         heads = 2,
         dim_head = 32,
+        template_embedder_type = 'se3',
         attn_types = ('full', 'intra_attn', 'seq_only')
     )
 
@@ -138,6 +139,38 @@ def test_templates():
         templates_coors = templates_coors,
         templates_mask = templates_mask
     )
+    assert True
+
+def test_templates_en():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        template_embedder_type = 'en',
+        attn_types = ('full', 'intra_attn', 'seq_only')
+    )
+
+    seq = torch.randint(0, 21, (2, 16))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 32))
+    msa_mask = torch.ones_like(msa).bool()
+
+    templates_seq = torch.randint(0, 21, (2, 2, 16))
+    templates_coors = torch.randn(2, 2, 16, 3)
+    templates_mask = torch.ones_like(templates_seq).bool()
+
+    distogram = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        templates_seq = templates_seq,
+        templates_coors = templates_coors,
+        templates_mask = templates_mask
+    )
+    assert True
 
 def test_embeddings():
     model = Alphafold2(

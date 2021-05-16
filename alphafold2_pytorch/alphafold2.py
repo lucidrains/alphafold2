@@ -1171,14 +1171,14 @@ class Alphafold2(nn.Module):
             # todo (make efficient)
 
             if exists(templates_sidechains):
-                if self.use_se3_transformer:
+                if self.template_embedder_type == 'se3':
                     t_seq = self.template_sidechain_emb(
                         t_seq,
                         templates_sidechains,
                         templates_coors,
                         mask = templates_mask
                     )
-                else:
+                elif self.template_embedder_type == 'en':
                     shape = t_seq.shape
                     t_seq = rearrange(t_seq, 'b t n d -> (b t) n d')
                     templates_coors = rearrange(templates_coors, 'b t n c -> (b t) n c')
