@@ -524,13 +524,13 @@ def mat_input_to_masked(x, x_mask=None, edges_mat=None, edges=None,
             edges = torch.nonzero(edges_mat, as_tuple=False).t()
             edges = edges[1:] + edges[:1]*batch_dim
         # get the batch identifier for each node
-        batch = (torch.arange(x.shape[0]) // batch_dim)[x_mask]
+        batch = (torch.arange(x.shape[0], device=x.device) // batch_dim)[x_mask]
     else:
         # edges to indices format
         if edges_mat is not None and edges is None:
             edges = torch.nonzero(edges_mat, as_tuple=False).t()
         # get the batch identifier for each node
-        batch = torch.zeros(x.shape[0]).to(x.device)
+        batch = torch.zeros(x.shape[0], device=x.device).to(x.device)
 
     # adapt edge attrs if provided
     if edge_attr_mat is not None and edge_attr is None: 
