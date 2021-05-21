@@ -162,7 +162,7 @@ You can also pass in a tensor of shape (14,) defining which atoms you would like
 
 ex.
 
-```
+```python
 atoms = torch.tensor([1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1])
 ```
 
