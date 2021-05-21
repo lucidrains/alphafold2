@@ -33,6 +33,13 @@ Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
 def exists(val):
     return val is not None
 
+def maybe(fn):
+    def inner(t, *args, **kwargs):
+        if not exists(t):
+            return None
+        return fn(t, *args, **kwargs)
+    return inner
+
 def default(val, d):
     if exists(val):
         return val
@@ -708,7 +715,7 @@ class CoordModuleMDS(nn.Module):
         C_mask,
         cloud_mask,
         bb_flat_mask_crossed,
-        num_backbone_atoms
+        num_atoms
     ):
         if self.predict_real_value_distances:
             distances, distance_std = distance_pred.unbind(dim = -1)
@@ -735,7 +742,7 @@ class CoordModuleMDS(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(seq, coords, n_aa = num_backbone_atoms, cloud_mask = cloud_mask)
+        coords = sidechain_container(seq, coords, n_aa = num_atoms, cloud_mask = cloud_mask)
         coords = rearrange(coords, 'b n l d -> b (n l) d')
 
         return coords
@@ -805,7 +812,7 @@ class Alphafold2(nn.Module):
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
-        num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
+        atoms = 'backbone-only',               # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
@@ -835,8 +842,6 @@ class Alphafold2(nn.Module):
         coords_module = None                    # custom coords generation module
     ):
         super().__init__()
-        assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
-
         self.dim = dim
 
         # token embedding
@@ -976,10 +981,31 @@ class Alphafold2(nn.Module):
         if self.has_linear_attn:
             self.proj_updater = ProjectionUpdater(self.net, cross_attn_linear_projection_update_every)
 
+        # atom masking
+
+        if atoms == 'backbone-only':
+            atom_mask = torch.tensor([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'backbone-with-cbeta':
+            atom_mask = torch.tensor([1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'all':
+            atom_mask = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+        elif atoms == 'backbone-with-oxygen':
+            atom_mask = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'backbone-with-cbeta-and-oxygen':
+            atom_mask = torch.tensor([1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif torch.is_tensor(atoms):
+            atom_mask = atoms
+        else:
+            raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
+
+        assert tuple(atom_mask.shape) == (14,), 'atoms needs to be of the correct shape (14,)'
+
+        self.register_buffer('atom_mask', atom_mask.bool())
+
         # to distogram output
 
-        self.num_backbone_atoms = num_backbone_atoms
-        needs_upsample = num_backbone_atoms > 1
+        trunk_upsample_factor = atom_mask.sum().item()
+        needs_upsample = trunk_upsample_factor > 1
 
         self.predict_real_value_distances = predict_real_value_distances
         dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
@@ -987,9 +1013,9 @@ class Alphafold2(nn.Module):
         self.to_distogram_logits = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Sequential(
-                nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
+                nn.Linear(dim, dim * (trunk_upsample_factor ** 2)),
                 Rearrange('b h w c -> b c h w'),
-                nn.PixelShuffle(num_backbone_atoms),
+                nn.PixelShuffle(trunk_upsample_factor),
                 Rearrange('b c h w -> b h w c')
             ) if needs_upsample else nn.Identity(),
             nn.Linear(dim, dim_distance_pred)
@@ -1298,18 +1324,21 @@ class Alphafold2(nn.Module):
         if not self.predict_coords or return_trunk:
             return ret
 
+        # prepare atom mask
+
+        atom_mask = self.atom_mask
+        num_atoms = atom_mask.sum().item()
+
         # prepare mask for backbone coordinates
 
-        assert self.num_backbone_atoms > 1, 'must constitute to at least 3 atomic coordinates for backbone'
-
-        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_backbone_atoms)
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = num_atoms)
 
         cloud_mask = scn_cloud_mask(seq, boolean = True)
         flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
         chain_mask = (mask.unsqueeze(-1) * cloud_mask)
         flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-        bb_flat_mask = rearrange(chain_mask[..., :self.num_backbone_atoms], 'b l c -> b (l c)')
+        bb_flat_mask = rearrange(chain_mask[..., :num_atoms], 'b l c -> b (l c)')
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
         coords = self.trunk_to_coords(
@@ -1321,12 +1350,12 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_backbone_atoms = self.num_backbone_atoms
+            num_atoms = num_atoms
         )
 
         # derive nodes
 
-        num_atoms_per_residue = coords.shape[-2] // seq.shape[1]
+        num_atoms_per_residue = 14
 
         structure_embed = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
@@ -1344,8 +1373,7 @@ class Alphafold2(nn.Module):
         if exists(self.to_equivariant_net_edges):
             edges = self.to_equivariant_net_edges(trunk_embeds)
             edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
-            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms_per_residue, m = num_atoms)
-            edges = edges.double()
+            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = num_atoms_per_residue, l2 = num_atoms_per_residue)
 
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
@@ -1367,10 +1395,24 @@ class Alphafold2(nn.Module):
             pooled_feats = pooled_feats.double()
             structure_kwargs = {'global_feats': pooled_feats}
 
+        # prepare only atoms defined by atom mask
+
+        atom_mask = repeat(atom_mask, 'a -> () (n a)', n = n)
+        atom_mask_crossed = atom_mask[:, :, None] & atom_mask[:, None, :]
+        total_atoms = num_atoms * n
+
+        coords  = coords.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
+        x       = x.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
+        adj_mat = adj_mat.masked_select(atom_mask_crossed).reshape(b, total_atoms, total_atoms)
+        flat_chain_mask = flat_chain_mask.masked_select(atom_mask).reshape(b, total_atoms)
+
+        if exists(edges):
+            edges   = edges.masked_select(atom_mask_crossed[..., None]).reshape(b, total_atoms, total_atoms, -1)
+
         # prepare float64 precision for equivariance
 
         original_dtype = coords.dtype
-        x, coords = map(lambda t: t.double(), (x, coords))
+        x, coords, edges = map(maybe(lambda t: t.double()), (x, coords, edges))
 
         # iterative refinement with equivariant transformer in high precision
 

@@ -98,7 +98,6 @@ model = Alphafold2(
     dim_head = 64,
     predict_coords = True,
     structure_module_type = 'se3',          # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
-    num_backbone_atoms = 3,                 # C, Ca, N coordinates
     structure_module_dim = 4,               # se3 transformer dimension
     structure_module_depth = 1,             # depth
     structure_module_heads = 1,             # heads
@@ -118,6 +117,53 @@ coords = model(
     mask = mask,
     msa_mask = msa_mask
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
+```
+
+## Atoms
+
+The underlying assumption is that the trunk works on the residue level, and then constitutes to atomic level for the structure module, whether it be SE3 Transformers, E(n)-Transformer, or EGNN doing the refinement. This library defaults to the 3 backbone atoms (C, Ca, N), but you can configure it to include any other atom you like, including Cb and the sidechains.
+
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    predict_coords = True,
+    atoms = 'backbone-with-cbeta'
+).cuda()
+
+seq = torch.randint(0, 21, (2, 64)).cuda()
+msa = torch.randint(0, 21, (2, 5, 60)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+coords = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (2, 64 * 4, 3)  <-- 4 atoms per residue (C, Ca, N, Cb)
+```
+
+Valid choices for `atoms` include:
+
+- `backbone` - 3 backbone atoms (C, Ca, N) [default]
+- `backbone-with-cbeta` - 3 backbone atoms and C beta
+- `backbone-with-oxygen` - 3 backbone atoms and oxygen from carboxyl
+- `backbone-with-cbeta-and-oxygen` - 3 backbone atoms with C beta and oxygen
+- `all` - backbone and all other atoms from sidechain
+
+You can also pass in a tensor of shape (14,) defining which atoms you would like to include
+
+ex.
+
+```
+atoms = torch.tensor([1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1])
 ```
 
 ## MSA, ESM, or ProtTrans Embeddings
@@ -196,7 +242,6 @@ model = Alphafold2(
     predict_coords = True,
     predict_real_value_distances = True,      # set this to True
     structure_module_type = 'se3',
-    num_backbone_atoms = 3,
     structure_module_dim = 4,
     structure_module_depth = 1,
     structure_module_heads = 1,
