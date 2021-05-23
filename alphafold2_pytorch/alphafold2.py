@@ -811,7 +811,6 @@ class Alphafold2(nn.Module):
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
-        use_template = False,
         template_attn_depth = 2,
         atoms = 'backbone-only',               # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
