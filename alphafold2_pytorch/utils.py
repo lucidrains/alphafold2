@@ -378,8 +378,9 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
         embedding = encoder(input_ids=torch.tensor(ids['input_ids']).to(device), 
                             attention_mask=torch.tensor(ids["attention_mask"]).to(device))
     # return (batch, seq_len, embedd_dim)
-    token_reps = embedding.last_hidden_state[:, shift_left:shift_right]
-    return token_reps.to(device)
+    token_reps = embedding.last_hidden_state[:, shift_left:shift_right].to(device)
+    token_reps = expand_dims_to(token_reps, 4-len(token_reps.sape))
+    return token_reps
 
 
 def get_all_protein_ids(dataloader, verbose=False):
