@@ -376,8 +376,7 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
                                                      return_tensors="pt")
     with torch.no_grad():
         embedding = encoder(input_ids=torch.tensor(ids['input_ids']).to(device), 
-                          attention_mask=torch.tensor(ids["attention_mask"]).to(device),
-                          decoder_input_ids=None)
+                            attention_mask=torch.tensor(ids["attention_mask"]).to(device))
     # return (batch, seq_len, embedd_dim)
     token_reps = embedding.last_hidden_state[:, shift_left:shift_right]
     return token_reps.to(device)
