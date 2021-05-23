@@ -999,7 +999,7 @@ class Alphafold2(nn.Module):
             atom_mask = atoms
         else:
             raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
-            
+
         self.num_atoms = atom_mask.sum(-1).item()
 
         assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'
@@ -1401,7 +1401,7 @@ class Alphafold2(nn.Module):
 
         atom_mask = repeat(self.atom_mask, 'a -> () (n a)', n = n)
         atom_mask_crossed = atom_mask[:, :, None] & atom_mask[:, None, :]
-        total_atoms = num_atoms * n
+        total_atoms = self.num_atoms * n
 
         coords  = coords.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
         x       = x.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
