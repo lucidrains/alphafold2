@@ -465,6 +465,7 @@ class LinearAttention(Attention):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
+            v = apply_rotary_pos_emb(v, rot_k)
 
         # linear attention masking
 
@@ -530,6 +531,7 @@ class SparseAttention(Attention):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
+            v = apply_rotary_pos_emb(v, rot_k)
 
         key_pad_mask = None
         if exists(mask):
