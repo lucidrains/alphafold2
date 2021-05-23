@@ -350,7 +350,7 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
         Inputs:
         * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
         * tokenizer:  tokenizer model: T5Tokenizer
-        * model: encoder model: T5EncoderModel
+        * encoder: encoder model: T5EncoderModel
                  ex: from transformers import T5EncoderModel, T5Tokenizer
                      model_name = "Rostlab/prot_t5_xl_uniref50"
                      tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
@@ -375,7 +375,7 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
                                                      padding=True, 
                                                      return_tensors="pt")
     with torch.no_grad():
-        embedding = model(input_ids=torch.tensor(ids['input_ids']).to(device), 
+        embedding = encoder(input_ids=torch.tensor(ids['input_ids']).to(device), 
                           attention_mask=torch.tensor(ids["attention_mask"]).to(device),
                           decoder_input_ids=None)
     # return (batch, seq_len, embedd_dim)
@@ -604,7 +604,7 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
                or matrices of masked atoms (for batched training). 
                for indexes, only 1 seq is supported.
         * sparse: bool. whether to use torch_sparse for adj_mat calc
-        Outputs: edge_idxs, edge_attrs. 
+        Outputs: edge_idxs, edge_types (degree of adjacency). 
     """
     device = seqs.device
     # set up container adj_mat (will get trimmed - less than 14)
@@ -640,8 +640,8 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         return attr_mat.bool().to(seqs.device), attr_mat.to(device)
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
-        edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
-        return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
+        edge_types = attr_mat[0, edge_idxs[0], edge_idxs[1]]
+        return edge_idxs.to(seqs.device), edge_types.to(seqs.device)
 
 
 def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
