@@ -585,14 +585,12 @@ def nth_deg_adjacency(adj_mat, n=1, sparse=False):
         if sparse:
             new_idxs, new_vals = torch_sparse.spspmm(new_idxs, new_vals, idxs, vals, m=m, k=k, n=n)
             new_vals = new_vals.bool().float()
-            new_adj_mat = torch.zeros_like(attr_mat)
-            new_adj_mat[new_idxs[0], new_idxs[1]] = new_vals
-            # sparse to dense is slower
-            # torch.sparse.FloatTensor(idxs, vals).to_dense()
+            # fill by indexes bc it's faster in sparse mode - will need an intersection function
+            previous = attr_mat[new_idxs[0], new_idxs[1]].bool().float()
+            attr_mat[new_idxs[0], new_idxs[1]] = (1 - previous)*(i+1)
         else:
             new_adj_mat = (new_adj_mat @ adj_mat).bool().float() 
-
-        attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
+            attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
 
     return new_adj_mat, attr_mat
 

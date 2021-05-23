@@ -11,13 +11,15 @@ def test_mat_to_masked():
     edges = torch.nonzero(edges_mat, as_tuple=False).t()
 
     # test normal edges / nodes
-    cleaned = mat_input_to_masked(a, x_mask, edges=edges)
-    cleaned_2 = mat_input_to_masked(a, x_mask, edges_mat=edges_mat)
+    cleaned = mat_input_to_masked(x, x_mask, edges=edges)
+    cleaned_2 = mat_input_to_masked(x, x_mask, edges_mat=edges_mat)
 
     # test batch dimension
     x_ = torch.stack([x]*2, dim=0)
     x_mask_ = torch.stack([x_mask]*2, dim=0)
-    edges_mat_ = torch.stack([edges_mat_]*2, dim=0)
+    edges_mat_ = torch.stack([edges_mat]*2, dim=0)
+
+    cleaned_3 = mat_input_to_masked(x_, x_mask_, edges_mat=edges_mat_)
     assert True
 
 
