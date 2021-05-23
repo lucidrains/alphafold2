@@ -1069,10 +1069,12 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
            (Y is not None or Y_mat is not None), "The true and predicted coords or dist mats must be provided"
     # calculate distance matrices
     if X_mat is None: 
+        X = X.squeeze()
         if clamp is not None:
             X = torch.clamp(X, *clamp)
         X_mat = torch.cdist(X, X, p=p)
     if Y_mat is None: 
+        Y = Y.squeeze()
         if clamp is not None:
             Y = torch.clamp(Y, *clamp)
         Y_mat = torch.cdist(Y, Y, p=p)
@@ -1081,7 +1083,7 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
 
     # do custom expression if passed
     if custom is not None:
-        return custom(X_mat, Y_mat).mean()
+        return custom(X_mat.squeeze(), Y_mat.squeeze()).mean()
     # **2 ensures always positive. Later scale back to desired power
     else:
         loss = ( X_mat - Y_mat )**2 

@@ -1135,7 +1135,8 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False
+        return_confidence = False,
+        refine = True
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -1351,6 +1352,9 @@ class Alphafold2(nn.Module):
             bb_flat_mask_crossed = bb_flat_mask_crossed,
             num_atoms = self.num_atoms
         )
+
+        if not refine: 
+            return coords
 
         # derive nodes
 
