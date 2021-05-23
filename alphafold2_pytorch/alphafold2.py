@@ -999,8 +999,7 @@ class Alphafold2(nn.Module):
             atom_mask = atoms
         else:
             raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
-
-        self.atom_mask = atom_mask
+            
         self.num_atoms = atom_mask.sum(-1).item()
 
         assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'

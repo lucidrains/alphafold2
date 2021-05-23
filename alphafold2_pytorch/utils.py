@@ -380,7 +380,7 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
     # return (batch, seq_len, embedd_dim)
     token_reps = embedding.last_hidden_state[:, shift_left:shift_right].to(device)
     token_reps = expand_dims_to(token_reps, 4-len(token_reps.shape))
-    return token_reps
+    return token_reps.float()
 
 
 def get_all_protein_ids(dataloader, verbose=False):
