@@ -811,6 +811,7 @@ class Alphafold2(nn.Module):
         sparse_self_attn = False,
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
+        use_template = False,
         template_attn_depth = 2,
         atoms = 'backbone-only',               # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
@@ -876,35 +877,36 @@ class Alphafold2(nn.Module):
 
         self.return_aux_logits = return_aux_logits
 
-        # template sidechain encoding
+        # template sidechain encoding - only if needed
 
         self.template_embedder_type = template_embedder_type
 
-        if template_embedder_type == 'se3':
-            self.template_sidechain_emb = SE3TemplateEmbedder(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                num_neighbors = 12,
-                depth = 4,
-                input_degrees = 2,
-                num_degrees = 2,
-                output_degrees = 1,
-                reversible = True,
-                tie_key_values = True,
-                one_headed_key_values = True,
-                num_positions = max_seq_len
-            )
-        elif template_embedder_type == 'en':
-            self.template_sidechain_emb = EnTransformer(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                neighbors = 32,
-                depth = 4
-            )
-        else:
-            raise ValueError('template embedder type must be either "se3" or "en"')
+        if isinstance(template_embedder_type, str): 
+            if template_embedder_type == 'se3':
+                self.template_sidechain_emb = SE3TemplateEmbedder(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    num_neighbors = 12,
+                    depth = 4,
+                    input_degrees = 2,
+                    num_degrees = 2,
+                    output_degrees = 1,
+                    reversible = True,
+                    tie_key_values = True,
+                    one_headed_key_values = True,
+                    num_positions = max_seq_len
+                )
+            elif template_embedder_type == 'en':
+                self.template_sidechain_emb = EnTransformer(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    neighbors = 32,
+                    depth = 4
+                )
+            else:
+                raise ValueError('template embedder type must be either "se3" or "en"')
 
         # custom embedding projection
 
@@ -998,13 +1000,15 @@ class Alphafold2(nn.Module):
         else:
             raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
 
-        assert tuple(atom_mask.shape) == (14,), 'atoms needs to be of the correct shape (14,)'
+        self.num_atoms = atom_mask.sum(-1).item()
+
+        assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'
 
         self.register_buffer('atom_mask', atom_mask.bool())
 
         # to distogram output
 
-        trunk_upsample_factor = atom_mask.sum().item()
+        trunk_upsample_factor = self.num_atoms
         needs_upsample = trunk_upsample_factor > 1
 
         self.predict_real_value_distances = predict_real_value_distances
@@ -1324,21 +1328,16 @@ class Alphafold2(nn.Module):
         if not self.predict_coords or return_trunk:
             return ret
 
-        # prepare atom mask
-
-        atom_mask = self.atom_mask
-        num_atoms = atom_mask.sum().item()
-
         # prepare mask for backbone coordinates
 
-        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = num_atoms)
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_atoms)
 
         cloud_mask = scn_cloud_mask(seq, boolean = True)
         flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
         chain_mask = (mask.unsqueeze(-1) * cloud_mask)
         flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-        bb_flat_mask = rearrange(chain_mask[..., :num_atoms], 'b l c -> b (l c)')
+        bb_flat_mask = rearrange(chain_mask[..., :self.num_atoms], 'b l c -> b (l c)')
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
         coords = self.trunk_to_coords(
@@ -1350,17 +1349,15 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_atoms = num_atoms
+            num_atoms = self.num_atoms
         )
 
         # derive nodes
 
-        num_atoms_per_residue = 14
-
         structure_embed = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = num_atoms_per_residue)
+        x = repeat(x, 'b n d -> b n l d', l = constants.NUM_COORDS_PER_RES)
 
         atom_tokens = scn_atom_embedd(seq)
         x += self.atom_tokens_embed(atom_tokens)
@@ -1373,7 +1370,7 @@ class Alphafold2(nn.Module):
         if exists(self.to_equivariant_net_edges):
             edges = self.to_equivariant_net_edges(trunk_embeds)
             edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
-            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = num_atoms_per_residue, l2 = num_atoms_per_residue)
+            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = constants.NUM_COORDS_PER_RES, l2 = constants.NUM_COORDS_PER_RES)
 
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
@@ -1397,7 +1394,7 @@ class Alphafold2(nn.Module):
 
         # prepare only atoms defined by atom mask
 
-        atom_mask = repeat(atom_mask, 'a -> () (n a)', n = n)
+        atom_mask = repeat(self.atom_mask, 'a -> () (n a)', n = n)
         atom_mask_crossed = atom_mask[:, :, None] & atom_mask[:, None, :]
         total_atoms = num_atoms * n
 
