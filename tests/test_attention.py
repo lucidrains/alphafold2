@@ -210,6 +210,7 @@ def test_coords_se3():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
+        refine_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -240,6 +241,7 @@ def test_coords_backbone_with_cbeta():
         dim_head = 32,
         atoms = 'backbone-with-cbeta',
         predict_coords = True,
+        refine_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -270,6 +272,7 @@ def test_coords_all_atoms():
         dim_head = 32,
         atoms = 'all',
         predict_coords = True,
+        refine_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -323,6 +326,7 @@ def test_custom_coords_module():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
+        refine_coords = True, 
         structure_module_dim = 4,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -353,6 +357,7 @@ def test_coords_se3_with_global_nodes():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
+        refine_coords = True, 
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -384,6 +389,7 @@ def test_edges_to_equivariant_network():
         dim_head = 32,
         structure_module_type = "en",
         predict_coords = True,
+        refine_coords = True,
         predict_angles = True
     )
 
@@ -409,6 +415,7 @@ def test_real_value_distance_with_coords():
         heads = 2,
         dim_head = 16,
         predict_coords = True,
+        refine_coords = True,
         predict_real_value_distances = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
@@ -439,6 +446,7 @@ def test_coords_se3_backwards():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
+        refine_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -469,7 +477,8 @@ def test_coords_En():
         heads = 2,
         dim_head = 32,
         structure_module_type = "en",
-        predict_coords = True
+        predict_coords = True,
+        refine_coords = True
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -500,7 +509,8 @@ def test_coords_En_backwards():
         heads = 2,
         dim_head = 32,
         structure_module_type = "en",
-        predict_coords = True
+        predict_coords = True,
+        refine_coords = True
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -526,7 +536,8 @@ def test_coords_egnn_backwards():
         heads = 2,
         dim_head = 32,
         structure_module_type = "egnn",
-        predict_coords = True
+        predict_coords = True,
+        refine_coords = True
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -553,7 +564,8 @@ def test_confidence_En():
         heads = 2,
         dim_head = 32,
         structure_module_type = "en",
-        predict_coords = True
+        predict_coords = True, 
+        refine_coords = True
     )
 
     seq = torch.randint(0, 21, (2, 16))

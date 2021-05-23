@@ -817,6 +817,7 @@ class Alphafold2(nn.Module):
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
+        refine_coords = False,                 # don't start refiners if false
         predict_real_value_distances = False,
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
@@ -1000,6 +1001,7 @@ class Alphafold2(nn.Module):
         else:
             raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
 
+        self.atom_mask = atom_mask
         self.num_atoms = atom_mask.sum(-1).item()
 
         assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'
@@ -1051,6 +1053,7 @@ class Alphafold2(nn.Module):
 
         # to coordinate output
 
+        self.refine_coords = refine_coords
         self.predict_coords = predict_coords
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
@@ -1063,7 +1066,7 @@ class Alphafold2(nn.Module):
 
         self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
 
-        if self.predict_coords:
+        if self.refine_coords:
             with torch_default_dtype(torch.float64):
                 self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
                 self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
@@ -1353,7 +1356,7 @@ class Alphafold2(nn.Module):
             num_atoms = self.num_atoms
         )
 
-        if not refine: 
+        if not self.refine_coords or not refine: 
             return coords
 
         # derive nodes
