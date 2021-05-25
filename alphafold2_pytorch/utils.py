@@ -664,7 +664,7 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
 
     # early check if whole chain is already pred
-    if n_aa == 14:
+    if cum_atom_mask[-1] == 14:
         return predicted
 
     # build scaffold from (N, CA, C, CB) - do in cpu
@@ -690,12 +690,9 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
         coords, _ = mp_nerf.proteins.sidechain_fold(wrapper = new_coords[s, :-padding or None].detach(),
                                                     **scaffolds, c_beta = cum_atom_mask[4]==5)
         # add detached scn
-        if n_aa <=3: 
-            new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]
-        # add detachyed scn and =O, but not cbeta    
-        elif n_aa == 4: 
-            new_coords[s, :-padding or None, 5:] = coords[:, 5:]
-            new_coords[s, :-padding or None, 3] = coords[:, 3]
+        for i,atom in enumerate(atom_mask.tolist()):
+            if not atom:
+                new_coords[:, :, cum_atom_mask[i]-1] = coords[:, :, i]
 
     new_coords = new_coords.to(device)
     if cloud_mask is not None:
