@@ -692,7 +692,7 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
         # add detached scn
         for i,atom in enumerate(atom_mask.tolist()):
             if not atom:
-                new_coords[:, :, cum_atom_mask[i]-1] = coords[:, :, i]
+                new_coords[:, :, cum_atom_mask[i]-1] = coords[:, i]
 
     new_coords = new_coords.to(device)
     if cloud_mask is not None:
