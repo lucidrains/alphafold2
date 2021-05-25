@@ -657,7 +657,7 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
         Outputs: whole coordinates of shape (batch, L, 14, 3)
     """
     atom_mask = atom_mask.bool().cpu().detach()
-    cum_atom_mask = atom_mask.cumsum().tolist()
+    cum_atom_mask = atom_mask.cumsum(dim=-1).tolist()
 
     device = backbones.device
     batch, length = backbones.shape[0], backbones.shape[1] // cum_atom_mask[-1]
