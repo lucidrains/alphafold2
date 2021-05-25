@@ -307,7 +307,6 @@ def test_custom_coords_module():
             *,
             distance_pred,
             trunk_embeds,
-            num_atoms,
             cloud_mask,
             **kwargs
         ):
