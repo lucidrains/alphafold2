@@ -674,7 +674,7 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
     # fill atoms if they have been passed
     for i,atom in enumerate(atom_mask.tolist()):
         if atom:
-            new_coords[:, :, cum_atom_mask[i]-1] = predicted[:, :, i]
+            new_coords[:, :, i] = predicted[:, :, cum_atom_mask[i]-1]
 
     # generate sidechain if not passed
     for s,seq in enumerate(seqs): 
@@ -692,7 +692,7 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
         # add detached scn
         for i,atom in enumerate(atom_mask.tolist()):
             if not atom:
-                new_coords[:, :-padding or None, cum_atom_mask[i]-1] = coords[:, i]
+                new_coords[:, :-padding or None, i] = coords[:, i]
 
     new_coords = new_coords.to(device)
     if cloud_mask is not None:
