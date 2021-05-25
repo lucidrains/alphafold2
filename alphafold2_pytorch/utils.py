@@ -643,14 +643,14 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         return edge_idxs.to(seqs.device), edge_types.to(seqs.device)
 
 
-def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
+def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok=20):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
         * seqs: (batch, L) either tensor or list
         * backbones: (batch, L*n_aa, 3): assume batch=1 (could be extended (?not tested)).
                      Coords for (N-term, C-alpha, C-term, (c_beta)) of every aa.
-        * n_aa: int. number of points for each aa in the backbones.
+        * atom_mask: (14,). int or bool tensor specifying which atoms are passed.
         * cloud_mask: (batch, l, c). optional. cloud mask from scn_cloud_mask`.
                       sets point outside of mask to 0. if passed, else c_alpha
         * padding: int. padding token. same as in sidechainnet: 20
@@ -661,22 +661,21 @@ def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
 
     # early check if whole chain is already pred
-    if n_aa > 4:
+    if n_aa == 14:
         return predicted
 
     # build scaffold from (N, CA, C, CB) - do in cpu
     new_coords = torch.zeros(batch, length, constants.NUM_COORDS_PER_RES, 3)
     predicted  = predicted.cpu() if predicted.is_cuda else predicted
 
-    # fill backbone (N, C_alpha, C)
-    if n_aa <= 3:
-        new_coords[:, :, :n_aa] = predicted
-    # fill backbone (N, C_alpha, C, C_beta)
-    elif n_aa == 4:
-        new_coords[:, :, :3] = predicted[:, :, :-1]
-        new_coords[:, :, 4] = predicted[:, :, -1]
+    # fill atoms if they have been passed
+    atom_mask = atom_mask.bool().cpu().detach()
+    cum_atom_mask = atom_mask.cumsum().tolist()
+    for i,atom in enumerate(atom_mask.tolist()):
+        if atom:
+            new_coords[:, :, cum_atom_mask[i]-1] = predicted[:, :, i]
 
-    # generate sidechain
+    # generate sidechain if not passed
     for s,seq in enumerate(seqs): 
         # format seq accordingly
         if isinstance(seq, torch.Tensor):
@@ -685,10 +684,10 @@ def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
         elif isinstance(seq, str):
             padding = 0
             seq_str = seq
-        # get scaffolds
+        # get scaffolds - will overwrite oxygen since its position is fully determined by N-C-CA
         scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, angles=None, device="cpu")
         coords, _ = mp_nerf.proteins.sidechain_fold(wrapper = new_coords[s, :-padding or None].detach(),
-                                                    **scaffolds, c_beta = n_aa!=4)
+                                                    **scaffolds, c_beta = cum_atom_mask[4]==5)
         # add detached scn
         if n_aa <=3: 
             new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]

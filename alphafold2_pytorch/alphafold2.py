@@ -715,7 +715,7 @@ class CoordModuleMDS(nn.Module):
         C_mask,
         cloud_mask,
         bb_flat_mask_crossed,
-        num_atoms
+        atom_mask
     ):
         if self.predict_real_value_distances:
             distances, distance_std = distance_pred.unbind(dim = -1)
@@ -742,7 +742,7 @@ class CoordModuleMDS(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(seq, coords, n_aa = num_atoms, cloud_mask = cloud_mask)
+        coords = sidechain_container(seq, coords, atom_mask = atom_mask, cloud_mask = cloud_mask)
         coords = rearrange(coords, 'b n l d -> b (n l) d')
 
         return coords
@@ -1351,7 +1351,7 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_atoms = self.num_atoms
+            num_atoms = self.atom_mask
         )
 
         if not self.refine_coords or not refine: 
