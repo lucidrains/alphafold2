@@ -656,8 +656,11 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
         * padding: int. padding token. same as in sidechainnet: 20
         Outputs: whole coordinates of shape (batch, L, 14, 3)
     """
+    atom_mask = atom_mask.bool().cpu().detach()
+    cum_atom_mask = atom_mask.cumsum().tolist()
+
     device = backbones.device
-    batch, length = backbones.shape[0], backbones.shape[1] // n_aa
+    batch, length = backbones.shape[0], backbones.shape[1] // cum_atom_mask[-1]
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
 
     # early check if whole chain is already pred
@@ -669,8 +672,6 @@ def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok
     predicted  = predicted.cpu() if predicted.is_cuda else predicted
 
     # fill atoms if they have been passed
-    atom_mask = atom_mask.bool().cpu().detach()
-    cum_atom_mask = atom_mask.cumsum().tolist()
     for i,atom in enumerate(atom_mask.tolist()):
         if atom:
             new_coords[:, :, cum_atom_mask[i]-1] = predicted[:, :, i]

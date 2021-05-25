@@ -63,7 +63,8 @@ def test_mds_and_mirrors():
 def test_sidechain_container():
     seqs = torch.tensor([[0]*137, [3]*137]).long()
     bb = torch.randn(2, 137*4, 3)
-    proto_3d = sidechain_container(seqs, bb, n_aa=4)
+    atom_mask = torch.tensor([1]*3 + [0]*11)
+    proto_3d = sidechain_container(seqs, bb, atom_mask=atom_mask)
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 
