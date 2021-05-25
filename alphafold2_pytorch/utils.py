@@ -350,7 +350,7 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
         Inputs:
         * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
         * tokenizer:  tokenizer model: T5Tokenizer
-        * model: encoder model: T5EncoderModel
+        * encoder: encoder model: T5EncoderModel
                  ex: from transformers import T5EncoderModel, T5Tokenizer
                      model_name = "Rostlab/prot_t5_xl_uniref50"
                      tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
@@ -375,12 +375,12 @@ def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
                                                      padding=True, 
                                                      return_tensors="pt")
     with torch.no_grad():
-        embedding = model(input_ids=torch.tensor(ids['input_ids']).to(device), 
-                          attention_mask=torch.tensor(ids["attention_mask"]).to(device),
-                          decoder_input_ids=None)
+        embedding = encoder(input_ids=torch.tensor(ids['input_ids']).to(device), 
+                            attention_mask=torch.tensor(ids["attention_mask"]).to(device))
     # return (batch, seq_len, embedd_dim)
-    token_reps = embedding.last_hidden_state[:, shift_left:shift_right]
-    return token_reps.to(device)
+    token_reps = embedding.last_hidden_state[:, shift_left:shift_right].to(device)
+    token_reps = expand_dims_to(token_reps, 4-len(token_reps.shape))
+    return token_reps.float()
 
 
 def get_all_protein_ids(dataloader, verbose=False):
@@ -524,13 +524,13 @@ def mat_input_to_masked(x, x_mask=None, edges_mat=None, edges=None,
             edges = torch.nonzero(edges_mat, as_tuple=False).t()
             edges = edges[1:] + edges[:1]*batch_dim
         # get the batch identifier for each node
-        batch = (torch.arange(x.shape[0]) // batch_dim)[x_mask]
+        batch = (torch.arange(x.shape[0], device=x.device) // batch_dim)[x_mask]
     else:
         # edges to indices format
         if edges_mat is not None and edges is None:
             edges = torch.nonzero(edges_mat, as_tuple=False).t()
         # get the batch identifier for each node
-        batch = torch.zeros(x.shape[0]).to(x.device)
+        batch = torch.zeros(x.shape[0], device=x.device).to(x.device)
 
     # adapt edge attrs if provided
     if edge_attr_mat is not None and edge_attr is None: 
@@ -585,14 +585,12 @@ def nth_deg_adjacency(adj_mat, n=1, sparse=False):
         if sparse:
             new_idxs, new_vals = torch_sparse.spspmm(new_idxs, new_vals, idxs, vals, m=m, k=k, n=n)
             new_vals = new_vals.bool().float()
-            new_adj_mat = torch.zeros_like(attr_mat)
-            new_adj_mat[new_idxs[0], new_idxs[1]] = new_vals
-            # sparse to dense is slower
-            # torch.sparse.FloatTensor(idxs, vals).to_dense()
+            # fill by indexes bc it's faster in sparse mode - will need an intersection function
+            previous = attr_mat[new_idxs[0], new_idxs[1]].bool().float()
+            attr_mat[new_idxs[0], new_idxs[1]] = (1 - previous)*(i+1)
         else:
             new_adj_mat = (new_adj_mat @ adj_mat).bool().float() 
-
-        attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
+            attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
 
     return new_adj_mat, attr_mat
 
@@ -606,7 +604,7 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
                or matrices of masked atoms (for batched training). 
                for indexes, only 1 seq is supported.
         * sparse: bool. whether to use torch_sparse for adj_mat calc
-        Outputs: edge_idxs, edge_attrs. 
+        Outputs: edge_idxs, edge_types (degree of adjacency). 
     """
     device = seqs.device
     # set up container adj_mat (will get trimmed - less than 14)
@@ -622,8 +620,7 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
             if len(aa_bonds) == 0: 
                 break
             # correct next position. for indexes functionality
-            if mat:
-                next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
+            next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
             # offset by pos in chain ( intra-aa bonds + with next aa )
             bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
             next_idx += next_aa
@@ -642,44 +639,44 @@ def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=Fal
         return attr_mat.bool().to(seqs.device), attr_mat.to(device)
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
-        edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
-        return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
+        edge_types = attr_mat[0, edge_idxs[0], edge_idxs[1]]
+        return edge_idxs.to(seqs.device), edge_types.to(seqs.device)
 
 
-def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
+def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok=20):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
         * seqs: (batch, L) either tensor or list
         * backbones: (batch, L*n_aa, 3): assume batch=1 (could be extended (?not tested)).
                      Coords for (N-term, C-alpha, C-term, (c_beta)) of every aa.
-        * n_aa: int. number of points for each aa in the backbones.
+        * atom_mask: (14,). int or bool tensor specifying which atoms are passed.
         * cloud_mask: (batch, l, c). optional. cloud mask from scn_cloud_mask`.
                       sets point outside of mask to 0. if passed, else c_alpha
         * padding: int. padding token. same as in sidechainnet: 20
         Outputs: whole coordinates of shape (batch, L, 14, 3)
     """
+    atom_mask = atom_mask.bool().cpu().detach()
+    cum_atom_mask = atom_mask.cumsum(dim=-1).tolist()
+
     device = backbones.device
-    batch, length = backbones.shape[0], backbones.shape[1] // n_aa
+    batch, length = backbones.shape[0], backbones.shape[1] // cum_atom_mask[-1]
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
 
     # early check if whole chain is already pred
-    if n_aa > 4:
+    if cum_atom_mask[-1] == 14:
         return predicted
 
     # build scaffold from (N, CA, C, CB) - do in cpu
     new_coords = torch.zeros(batch, length, constants.NUM_COORDS_PER_RES, 3)
     predicted  = predicted.cpu() if predicted.is_cuda else predicted
 
-    # fill backbone (N, C_alpha, C)
-    if n_aa <= 3:
-        new_coords[:, :, :n_aa] = predicted
-    # fill backbone (N, C_alpha, C, C_beta)
-    elif n_aa == 4:
-        new_coords[:, :, :3] = predicted[:, :, :-1]
-        new_coords[:, :, 4] = predicted[:, :, -1]
+    # fill atoms if they have been passed
+    for i,atom in enumerate(atom_mask.tolist()):
+        if atom:
+            new_coords[:, :, i] = predicted[:, :, cum_atom_mask[i]-1]
 
-    # generate sidechain
+    # generate sidechain if not passed
     for s,seq in enumerate(seqs): 
         # format seq accordingly
         if isinstance(seq, torch.Tensor):
@@ -688,17 +685,14 @@ def sidechain_container(seqs, backbones, n_aa, cloud_mask=None, padding_tok=20):
         elif isinstance(seq, str):
             padding = 0
             seq_str = seq
-        # get scaffolds
+        # get scaffolds - will overwrite oxygen since its position is fully determined by N-C-CA
         scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, angles=None, device="cpu")
         coords, _ = mp_nerf.proteins.sidechain_fold(wrapper = new_coords[s, :-padding or None].detach(),
-                                                    **scaffolds, c_beta = n_aa!=4)
+                                                    **scaffolds, c_beta = cum_atom_mask[4]==5)
         # add detached scn
-        if n_aa <=3: 
-            new_coords[s, :-padding or None, n_aa:] = coords[:, n_aa:]
-        # add detachyed scn and =O, but not cbeta    
-        elif n_aa == 4: 
-            new_coords[s, :-padding or None, 5:] = coords[:, 5:]
-            new_coords[s, :-padding or None, 3] = coords[:, 3]
+        for i,atom in enumerate(atom_mask.tolist()):
+            if not atom:
+                new_coords[:, :-padding or None, i] = coords[:, i]
 
     new_coords = new_coords.to(device)
     if cloud_mask is not None:
@@ -1072,10 +1066,12 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
            (Y is not None or Y_mat is not None), "The true and predicted coords or dist mats must be provided"
     # calculate distance matrices
     if X_mat is None: 
+        X = X.squeeze()
         if clamp is not None:
             X = torch.clamp(X, *clamp)
         X_mat = torch.cdist(X, X, p=p)
     if Y_mat is None: 
+        Y = Y.squeeze()
         if clamp is not None:
             Y = torch.clamp(Y, *clamp)
         Y_mat = torch.cdist(Y, Y, p=p)
@@ -1084,7 +1080,7 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
 
     # do custom expression if passed
     if custom is not None:
-        return custom(X_mat, Y_mat).mean()
+        return custom(X_mat.squeeze(), Y_mat.squeeze()).mean()
     # **2 ensures always positive. Later scale back to desired power
     else:
         loss = ( X_mat - Y_mat )**2 

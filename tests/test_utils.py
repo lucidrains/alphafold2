@@ -2,6 +2,27 @@ import torch
 import numpy as np
 from alphafold2_pytorch.utils import *
 
+def test_mat_to_masked():
+    # nodes
+    x = torch.ones(19, 3)
+    x_mask = torch.randn(19) > -0.3
+    # edges
+    edges_mat = torch.randn(19, 19) < 1
+    edges = torch.nonzero(edges_mat, as_tuple=False).t()
+
+    # test normal edges / nodes
+    cleaned = mat_input_to_masked(x, x_mask, edges=edges)
+    cleaned_2 = mat_input_to_masked(x, x_mask, edges_mat=edges_mat)
+
+    # test batch dimension
+    x_ = torch.stack([x]*2, dim=0)
+    x_mask_ = torch.stack([x_mask]*2, dim=0)
+    edges_mat_ = torch.stack([edges_mat]*2, dim=0)
+
+    cleaned_3 = mat_input_to_masked(x_, x_mask_, edges_mat=edges_mat_)
+    assert True
+
+
 def test_center_distogram_median():
     distogram = torch.randn(1, 128, 128, 37)
     distances, weights = center_distogram_torch(distogram, center = 'median')
@@ -42,7 +63,8 @@ def test_mds_and_mirrors():
 def test_sidechain_container():
     seqs = torch.tensor([[0]*137, [3]*137]).long()
     bb = torch.randn(2, 137*4, 3)
-    proto_3d = sidechain_container(seqs, bb, n_aa=4)
+    atom_mask = torch.tensor( [1]*4 + [0]*(14-4) )
+    proto_3d = sidechain_container(seqs, bb, atom_mask=atom_mask)
     assert list(proto_3d.shape) == [2, 137, 14, 3]
 
 

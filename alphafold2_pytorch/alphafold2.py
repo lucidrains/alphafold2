@@ -717,7 +717,7 @@ class CoordModuleMDS(nn.Module):
         C_mask,
         cloud_mask,
         bb_flat_mask_crossed,
-        num_atoms
+        atom_mask
     ):
         if self.predict_real_value_distances:
             distances, distance_std = distance_pred.unbind(dim = -1)
@@ -744,7 +744,7 @@ class CoordModuleMDS(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(seq, coords, n_aa = num_atoms, cloud_mask = cloud_mask)
+        coords = sidechain_container(seq, coords, atom_mask = atom_mask, cloud_mask = cloud_mask)
         coords = rearrange(coords, 'b n l d -> b (n l) d')
 
         return coords
@@ -818,6 +818,7 @@ class Alphafold2(nn.Module):
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
+        refine_coords = False,                 # don't start refiners if false
         predict_real_value_distances = False,
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
@@ -878,35 +879,36 @@ class Alphafold2(nn.Module):
 
         self.return_aux_logits = return_aux_logits
 
-        # template sidechain encoding
+        # template sidechain encoding - only if needed
 
         self.template_embedder_type = template_embedder_type
 
-        if template_embedder_type == 'se3':
-            self.template_sidechain_emb = SE3TemplateEmbedder(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                num_neighbors = 12,
-                depth = 4,
-                input_degrees = 2,
-                num_degrees = 2,
-                output_degrees = 1,
-                reversible = True,
-                tie_key_values = True,
-                one_headed_key_values = True,
-                num_positions = max_seq_len
-            )
-        elif template_embedder_type == 'en':
-            self.template_sidechain_emb = EnTransformer(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                neighbors = 32,
-                depth = 4
-            )
-        else:
-            raise ValueError('template embedder type must be either "se3" or "en"')
+        if isinstance(template_embedder_type, str): 
+            if template_embedder_type == 'se3':
+                self.template_sidechain_emb = SE3TemplateEmbedder(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    num_neighbors = 12,
+                    depth = 4,
+                    input_degrees = 2,
+                    num_degrees = 2,
+                    output_degrees = 1,
+                    reversible = True,
+                    tie_key_values = True,
+                    one_headed_key_values = True,
+                    num_positions = max_seq_len
+                )
+            elif template_embedder_type == 'en':
+                self.template_sidechain_emb = EnTransformer(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    neighbors = 32,
+                    depth = 4
+                )
+            else:
+                raise ValueError('template embedder type must be either "se3" or "en"')
 
         # custom embedding projection
 
@@ -1000,13 +1002,15 @@ class Alphafold2(nn.Module):
         else:
             raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
 
-        assert tuple(atom_mask.shape) == (14,), 'atoms needs to be of the correct shape (14,)'
+        self.num_atoms = atom_mask.sum(-1).item()
+
+        assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'
 
         self.register_buffer('atom_mask', atom_mask.bool())
 
         # to distogram output
 
-        trunk_upsample_factor = atom_mask.sum().item()
+        trunk_upsample_factor = self.num_atoms
         needs_upsample = trunk_upsample_factor > 1
 
         self.predict_real_value_distances = predict_real_value_distances
@@ -1049,6 +1053,7 @@ class Alphafold2(nn.Module):
 
         # to coordinate output
 
+        self.refine_coords = refine_coords
         self.predict_coords = predict_coords
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
@@ -1061,7 +1066,7 @@ class Alphafold2(nn.Module):
 
         self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
 
-        if self.predict_coords:
+        if self.refine_coords:
             with torch_default_dtype(torch.float64):
                 self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
                 self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
@@ -1133,7 +1138,8 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False
+        return_confidence = False,
+        refine = True
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -1326,21 +1332,16 @@ class Alphafold2(nn.Module):
         if not self.predict_coords or return_trunk:
             return ret
 
-        # prepare atom mask
-
-        atom_mask = self.atom_mask
-        num_atoms = atom_mask.sum().item()
-
         # prepare mask for backbone coordinates
 
-        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = num_atoms)
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_atoms)
 
         cloud_mask = scn_cloud_mask(seq, boolean = True)
         flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
         chain_mask = (mask.unsqueeze(-1) * cloud_mask)
         flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-        bb_flat_mask = rearrange(chain_mask[..., :num_atoms], 'b l c -> b (l c)')
+        bb_flat_mask = rearrange(chain_mask[..., :self.num_atoms], 'b l c -> b (l c)')
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
         coords = self.trunk_to_coords(
@@ -1352,17 +1353,18 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_atoms = num_atoms
+            atom_mask = self.atom_mask
         )
 
-        # derive nodes
+        if not self.refine_coords or not refine: 
+            return coords
 
-        num_atoms_per_residue = 14
+        # derive nodes
 
         structure_embed = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = num_atoms_per_residue)
+        x = repeat(x, 'b n d -> b n l d', l = constants.NUM_COORDS_PER_RES)
 
         atom_tokens = scn_atom_embedd(seq)
         x += self.atom_tokens_embed(atom_tokens)
@@ -1375,7 +1377,7 @@ class Alphafold2(nn.Module):
         if exists(self.to_equivariant_net_edges):
             edges = self.to_equivariant_net_edges(trunk_embeds)
             edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
-            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = num_atoms_per_residue, l2 = num_atoms_per_residue)
+            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = constants.NUM_COORDS_PER_RES, l2 = constants.NUM_COORDS_PER_RES)
 
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
@@ -1399,9 +1401,9 @@ class Alphafold2(nn.Module):
 
         # prepare only atoms defined by atom mask
 
-        atom_mask = repeat(atom_mask, 'a -> () (n a)', n = n)
+        atom_mask = repeat(self.atom_mask, 'a -> () (n a)', n = n)
         atom_mask_crossed = atom_mask[:, :, None] & atom_mask[:, None, :]
-        total_atoms = num_atoms * n
+        total_atoms = self.num_atoms * n
 
         coords  = coords.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
         x       = x.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
