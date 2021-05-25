@@ -1351,7 +1351,7 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_atoms = self.atom_mask
+            atom_mask = self.atom_mask
         )
 
         if not self.refine_coords or not refine: 
