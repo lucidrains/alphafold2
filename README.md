@@ -464,16 +464,19 @@ distogram = model(
 
 ## Equivariant Attention
 
-There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
+I have prepared a reimplementation of SE3 Transformer, as explained by Fabian Fuchs in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>.
 
-- <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
-- <a href="https://github.com/lucidrains/egnn-pytorch">Lie Transformer</a>
+In addition, a <a href="https://arxiv.org/abs/2102.09844">new paper</a> from Victor and Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. I have taken the main ideas from this paper and modified it to become a transformer (added attention to both features and coordinate updates).
 
-A <a href="https://arxiv.org/abs/2102.09844">new paper</a> from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `structure_module_type = "egnn"` or `structure_module_type = "en"` on Alphafold2 initialization.
+All three of the equivariant networks above have been integrated and are available for use in the repository for atomic coordinate refinement by simply setting one hyperparameter `structure_module_type`.
 
-- <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
+- `se3` <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
 
-- <a href="https://github.com/lucidrains/En-transformer">EGNN</a>
+- `egnn` <a href="https://github.com/lucidrains/En-transformer">EGNN</a>
+
+- `en` <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
+
+Of interest to readers, each of the three frameworks have also been validated by researchers on related problems.
 
 ## Testing
 
