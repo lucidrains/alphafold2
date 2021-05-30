@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'alphafold2-pytorch',
   packages = find_packages(),
-  version = '0.1.5',
+  version = '0.1.6',
   license='MIT',
   description = 'AlphaFold2 - Pytorch',
   author = 'Phil Wang, Eric Alcaide',
@@ -23,7 +23,7 @@ setup(
     'performer-pytorch>=1.0.11',
     'proDy',
     'requests',
-    'se3-transformer-pytorch>=0.5.7',
+    'se3-transformer-pytorch>=0.6.0',
     'sidechainnet',
     'torch>=1.6',
     'transformers',
