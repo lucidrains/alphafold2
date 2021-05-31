@@ -258,6 +258,22 @@ class KronInputWrapper(nn.Module):
 def same_padding(kernel, dilation):
     return (kernel + (kernel - 1) * (dilation - 1)) // 4
 
+class ReshapeForConv(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x, shape, mask = None, **kwargs):
+        x = x.view(*shape, -1)
+        x = rearrange(x, 'b h w c -> b c h w')
+
+        if exists(mask):
+            mask = mask.view(*shape)
+
+        x = self.fn(x, mask = mask)
+        x = rearrange(x, 'b c h w -> b (h w) c')
+        return x
+
 class HybridDimensionalConvBlock(nn.Module):
     def __init__(
         self,
