@@ -358,7 +358,6 @@ from alphafold2_pytorch import Alphafold2
 
 model = Alphafold2(
     dim = 256,
-    depth = 2,
     heads = 8,
     dim_head = 64,
     custom_block_types = (
