@@ -31,7 +31,7 @@ def test_reversible():
            FeedForward(dim) 
         ]))
 
-    layers = ReversibleSequence(layers)
+    layers = ReversibleSequence(layers, block_types = ('self', 'cross'))
 
     seq_shape = torch.Size((1, 16, 16, dim))
     msa_shape = torch.Size((1, 2, 16, dim))

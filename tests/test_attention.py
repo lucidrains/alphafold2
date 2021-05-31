@@ -43,6 +43,50 @@ def test_no_msa():
     )
     assert True
 
+def test_use_conv():
+    model = Alphafold2(
+        dim = 32,
+        depth = 4,
+        heads = 2,
+        dim_head = 32,
+        use_conv = True,
+        dilations = (1, 3, 5)
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    msa = torch.randint(0, 21, (2, 5, 64))
+    mask = torch.ones_like(seq).bool()
+    msa_mask = torch.ones_like(msa).bool()
+
+    distogram = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+    assert True
+
+def test_custom_blocks():
+    model = Alphafold2(
+        dim = 32,
+        heads = 2,
+        dim_head = 32,
+        custom_block_types = ('conv', 'conv', 'self', 'self', 'cross')
+    )
+
+    seq = torch.randint(0, 21, (2, 128))
+    msa = torch.randint(0, 21, (2, 5, 64))
+    mask = torch.ones_like(seq).bool()
+    msa_mask = torch.ones_like(msa).bool()
+
+    distogram = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+    assert True
+
 def test_anglegrams():
     model = Alphafold2(
         dim = 32,

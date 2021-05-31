@@ -262,6 +262,124 @@ coords = model(
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
 ```
 
+## Convolutions
+
+You can add convolutional blocks, for both the primary sequence as well as the MSA, by simply setting one extra keyword argument `use_conv = True`
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True # set this to True
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+The convolutional kernels follow the lead of <a href="https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415">this paper</a>, combining 1d and 2d kernels in one resnet-like block. You can fully customize the kernels as such.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True, # set this to True
+    conv_seq_kernels = ((9, 1), (1, 9), (3, 3)), # kernels for N x N primary sequence
+    conv_msa_kernels = ((1, 9), (3, 3)), # kernels for {num MSAs} x N MSAs
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+You can also do cycle dilation with one extra keyword argument. Default dilation is `1` for all layers.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True, # set this to True
+    dilations = (1, 3, 5) # cycle between dilations of 1, 3, 5
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+Finally, instead of following the pattern of convolutions, self-attention, cross-attention per depth repeating, you can customize any order you wish with the `custom_block_types` keyword
+
+ex. A network where you do predominately convolutions first, followed by self-attention + cross-attention blocks
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    custom_block_types = (
+        *(('conv',) * 6),
+        *(('self', 'cross') * 6)
+    )
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
 ## Sparse Attention
 
 You can train with Microsoft Deepspeed's <a href="https://www.deepspeed.ai/news/2020/09/08/sparse-attention.html">Sparse Attention</a>, but you will have to endure the installation process. It is two-steps.

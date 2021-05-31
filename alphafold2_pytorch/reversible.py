@@ -301,13 +301,21 @@ def irreversible_apply(inputs, ind, blocks, kwargs):
 # main reversible sequence class
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, input_blocks):
+    def __init__(self, input_blocks, block_types):
         super().__init__()
+        self.block_types = block_types
+
         blocks = nn.ModuleList([])
 
-        for self_attn_block, cross_attn_block in zip(*[iter(input_blocks)] * 2):
-            blocks.append(ReversibleSelfAttnBlock(*self_attn_block))
-            blocks.append(ReversibleCrossAttnBlock(*cross_attn_block))
+        for block, block_type in zip(input_blocks, block_types):
+            if block_type == 'self':
+                reversible_klass = ReversibleSelfAttnBlock
+            elif block_type == 'cross':
+                reversible_klass = ReversibleCrossAttnBlock
+            elif block_type == 'conv':
+                reversible_klass = ReversibleSelfAttnBlock
+
+            blocks.append(reversible_klass(*block))
 
         self.blocks = blocks
 

@@ -45,7 +45,7 @@ def default(val, d):
         return val
     return d() if isfunction(d) else d
 
-def cast_tuple(val, depth):
+def cast_tuple(val, depth = 1):
     return val if isinstance(val, tuple) else (val,) * depth
 
 # helper classes
@@ -256,7 +256,7 @@ class KronInputWrapper(nn.Module):
 # convolutional blocks
 
 def same_padding(kernel, dilation):
-    return (kernel + (kernel - 1) * (dilation - 1)) // 4
+    return (kernel + (kernel - 1) * (dilation - 1)) // 2
 
 class ReshapeForConv(nn.Module):
     def __init__(self, fn):
@@ -264,11 +264,12 @@ class ReshapeForConv(nn.Module):
         self.fn = fn
 
     def forward(self, x, shape, mask = None, **kwargs):
-        x = x.view(*shape, -1)
+        shape = norm_shape(shape)
+        x = x.view(*shape)
         x = rearrange(x, 'b h w c -> b c h w')
 
         if exists(mask):
-            mask = mask.view(*shape)
+            mask = mask.view(*shape[:-1])
 
         x = self.fn(x, mask = mask)
         x = rearrange(x, 'b c h w -> b (h w) c')
@@ -305,6 +306,7 @@ class HybridDimensionalConvBlock(nn.Module):
 
         out = []
         for conv in self.convs:
+            print(x.shape, conv(x).shape)
             out.append(conv(x))
 
         return sum(out)
@@ -808,9 +810,10 @@ class CoordModuleMDS(nn.Module):
 # main class
 
 class SequentialSequence(nn.Module):
-    def __init__(self, blocks):
+    def __init__(self, blocks, block_types):
         super().__init__()
         self.blocks = blocks
+        self.block_types = block_types
 
     def forward(
         self,
@@ -826,25 +829,43 @@ class SequentialSequence(nn.Module):
         msa_to_seq_pos_emb = None,
         **kwargs
     ):
-        for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
+        for block, block_type in zip(self.blocks, self.block_types):
+            print(block_type)
+            if block_type == 'self':
+                attn, ff, msa_attn, msa_ff = block
 
-            # self attention
+                # self attention
 
-            x = attn(x, shape = seq_shape, mask = mask, rotary_emb = seq_pos_emb) + x
+                x = attn(x, shape = seq_shape, mask = mask, rotary_emb = seq_pos_emb) + x
+                x = ff(x, shape = seq_shape) + x
 
-            if exists(m):
-                m = msa_attn(m, shape = msa_shape, mask = msa_mask, rotary_emb = msa_pos_emb) + m
+                if exists(m):
+                    m = msa_attn(m, shape = msa_shape, mask = msa_mask, rotary_emb = msa_pos_emb) + m
+                    m = msa_ff(m) + m
+
+            elif block_type == 'conv':
+                conv, ff, msa_conv, msa_ff = block
+
+                # convolutions
+
+                x = conv(x, shape = seq_shape, mask = mask) + x
+                x = ff(x, shape = seq_shape) + x
+
+                if exists(m):
+                    m = msa_conv(m, shape = msa_shape, mask = msa_mask) + m
+                    m = msa_ff(m) + m
+
+
+            elif block_type == 'cross' and exists(m):
+
+                cross_attn, msa_ff, msa_cross_attn, ff = block
 
                 # cross attention
 
                 x = cross_attn(x, m, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape, rotary_emb = seq_to_msa_pos_emb) + x
                 m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape, rotary_emb = msa_to_seq_pos_emb) + m
 
-            # feedforwards
-
-            x = ff(x, shape = seq_shape) + x
-
-            if exists(m):
+                x = ff(x, shape = seq_shape) + x
                 m = msa_ff(m) + m
 
         return x, m
@@ -893,12 +914,18 @@ class Alphafold2(nn.Module):
         cross_attn_linear_projection_update_every = 1000,
         cross_attn_kron_primary = False,
         cross_attn_kron_msa = False,
+        use_conv = False,
+        dilations = (1,),
+        conv_seq_kernels = ((9, 1), (1, 9), (3, 3)),
+        conv_msa_kernels = ((1, 9), (3, 3)),
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
         structure_num_global_nodes = 0,
         mds_iters = 5,                          # mds coupling related parameters
         use_eigen_mds = False,
-        coords_module = None                    # custom coords generation module
+        coords_module = None,                   # custom coords generation module
+        custom_block_types = None,
+        num_custom_blocks = 1
     ):
         super().__init__()
         self.dim = dim
@@ -972,8 +999,13 @@ class Alphafold2(nn.Module):
 
         # attention types
 
-        layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
-        layers_cross_attn_linear = cast_tuple(cross_attn_linear, depth)
+        layers_sparse_attn = cycle(cast_tuple(sparse_self_attn))
+
+        cross_attn_linear = cast_tuple(cross_attn_linear)
+        has_linear_attn = any(cross_attn_linear)
+        self.has_linear_attn = has_linear_attn
+
+        layers_cross_attn_linear = cycle(cross_attn_linear)
 
         # main trunk modules
 
@@ -981,63 +1013,90 @@ class Alphafold2(nn.Module):
         prenorm_cross = partial(PreNormCross, dim)
 
         layers = nn.ModuleList([])
-        attn_types = islice(cycle(attn_types), depth)
+        attn_types = cycle(attn_types)
 
-        for ind, layer_sparse_attn, layer_cross_attn_linear, attn_type in zip(range(depth), layers_sparse_attn, layers_cross_attn_linear, attn_types):
+        if not exists(custom_block_types):
+            default_block_types = ('self', 'cross')
 
-            # alternate between row and column attention to save memory each layer
+            if use_conv: # convolutional settings
+                default_block_types = ('conv', *default_block_types)
 
-            row_attn = ind % 2 == 0
-            col_attn = ind % 2 == 1
+            block_types = islice(cycle(default_block_types), depth * 2)
+        else:
+            block_types = islice(cycle(custom_block_types), num_custom_blocks * len(custom_block_types))
 
-            # self attention, for main sequence, msa, and optionally, templates
+        # setup alternating configs
 
+        dilations = cycle(cast_tuple(dilations))
+        row_attn = cycle([True, False])
+        col_attn = cycle([False, True])
+
+        for block_type in block_types:
             ff_tensor_slice = (slice(None), slice(0, 1))
+            if block_type == 'self':
 
-            if attn_type == 'full':
-                tensor_slice = None
-                template_axial_attn = True
-            elif attn_type == 'intra_attn':
-                tensor_slice = None
-                template_axial_attn = False
-            elif attn_type == 'seq_only':
+                # self attention, for main sequence, msa, and optionally, templates
+
+                attn_type = next(attn_types)
+                layer_sparse_attn = next(layers_sparse_attn)
+
+                if attn_type == 'full':
+                    tensor_slice = None
+                    template_axial_attn = True
+                elif attn_type == 'intra_attn':
+                    tensor_slice = None
+                    template_axial_attn = False
+                elif attn_type == 'seq_only':
+                    tensor_slice = (slice(None), slice(0, 1))
+                    template_axial_attn = False
+                else:
+                    raise ValueError(f'cannot find attention type {attn_type}')
+
+                layers.append(nn.ModuleList([
+                    prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = layer_sparse_attn, row_attn = next(row_attn), col_attn = next(col_attn)))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                    prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                ]))
+
+            elif block_type == 'cross':
+                # cross attention, for main sequence -> msa and then msa -> sequence
+
+                intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
+                layer_cross_attn_linear = next(layers_cross_attn_linear)
+
+                if layer_cross_attn_linear:
+                    cross_attn_fn = lambda: LinearAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
+                else:
+                    cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
+
+                layers.append(nn.ModuleList([
+                    intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron_primary, kron_context = cross_attn_kron_msa))),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                    intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron_primary, kron_queries = cross_attn_kron_msa))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                ]))
+
+            elif block_type == 'conv':
+                # self attention, for main sequence, msa, and optionally, templates
+
                 tensor_slice = (slice(None), slice(0, 1))
-                template_axial_attn = False
+
+                layers.append(nn.ModuleList([
+                    prenorm(InterceptAxialAttention(tensor_slice, ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_seq_kernels, dilations = 1)))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                    prenorm(ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_msa_kernels, dilations = next(dilations)))),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                ]))
+
             else:
-                raise ValueError(f'cannot find attention type {attn_type}')
-
-            layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = layer_sparse_attn, row_attn = row_attn, col_attn = col_attn))),
-                prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-            ]))
-
-            # cross attention, for main sequence -> msa and then msa -> sequence
-
-            intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
-
-            if layer_cross_attn_linear:
-                cross_attn_fn = lambda: LinearAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
-            else:
-                cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
-
-            layers.append(nn.ModuleList([
-                intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron_primary, kron_context = cross_attn_kron_msa))),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron_primary, kron_queries = cross_attn_kron_msa))),
-                prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-            ]))
-
-        if not reversible:
-            layers = nn.ModuleList(list(map(lambda t: t[:3], layers))) # remove last feed forward if not reversible
+                raise ValueError(f'invalid block type ({block_type})')
 
         trunk_class = SequentialSequence if not reversible else ReversibleSequence
-        self.net = trunk_class(layers)
+        self.net = trunk_class(layers, block_types)
 
         # updating linear attention projections, if there exists linear attention
 
-        self.has_linear_attn = any(layers_cross_attn_linear)
         if self.has_linear_attn:
             self.proj_updater = ProjectionUpdater(self.net, cross_attn_linear_projection_update_every)
 
