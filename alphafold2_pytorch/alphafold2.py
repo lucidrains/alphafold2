@@ -265,7 +265,8 @@ class HybridDimensionalConvBlock(nn.Module):
         dim,
         kernels,
         dilations,
-        expansion_factor = 2
+        expansion_factor = 2,
+        glu_gate = False
     ):
         super().__init__()
         self.convs = nn.ModuleList([])
@@ -273,10 +274,11 @@ class HybridDimensionalConvBlock(nn.Module):
 
         for kernel, dilation in zip(kernels, dilations):
             padding = tuple(map(partial(same_padding, dilation = dilation), kernel))
+            mult = 2 if glu_gate else 1
 
             self.convs.append(nn.Sequential(
-                nn.Conv2d(dim, dim * expansion_factor, kernel, padding = padding),
-                nn.GELU(),
+                nn.Conv2d(dim, dim * expansion_factor * mult, kernel, padding = padding),
+                nn.GELU() if not glu_gate else nn.GLU(dim = 1),
                 nn.Conv2d(dim * expansion_factor, dim, kernel, padding = padding),
             ))
 
