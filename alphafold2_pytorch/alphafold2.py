@@ -306,7 +306,6 @@ class HybridDimensionalConvBlock(nn.Module):
 
         out = []
         for conv in self.convs:
-            print(x.shape, conv(x).shape)
             out.append(conv(x))
 
         return sum(out)
@@ -830,7 +829,6 @@ class SequentialSequence(nn.Module):
         **kwargs
     ):
         for block, block_type in zip(self.blocks, self.block_types):
-            print(block_type)
             if block_type == 'self':
                 attn, ff, msa_attn, msa_ff = block
 
