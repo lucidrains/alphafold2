@@ -283,7 +283,7 @@ class HybridDimensionalConvBlock(nn.Module):
         kernels,
         dilations,
         expansion_factor = 2,
-        glu_gate = False
+        glu_gated = False
     ):
         super().__init__()
         self.convs = nn.ModuleList([])
@@ -291,11 +291,11 @@ class HybridDimensionalConvBlock(nn.Module):
 
         for kernel, dilation in zip(kernels, dilations):
             padding = tuple(map(partial(same_padding, dilation = dilation), kernel))
-            mult = 2 if glu_gate else 1
+            mult = 2 if glu_gated else 1
 
             self.convs.append(nn.Sequential(
                 nn.Conv2d(dim, dim * expansion_factor * mult, kernel, padding = padding),
-                nn.GELU() if not glu_gate else nn.GLU(dim = 1),
+                nn.GELU() if not glu_gated else nn.GLU(dim = 1),
                 nn.Conv2d(dim * expansion_factor, dim, kernel, padding = padding),
             ))
 
@@ -918,6 +918,7 @@ class Alphafold2(nn.Module):
         dilations = (1,),
         conv_seq_kernels = ((9, 1), (1, 9), (3, 3)),
         conv_msa_kernels = ((1, 9), (3, 3)),
+        conv_glu_gated = False,
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
         structure_num_global_nodes = 0,
@@ -1085,7 +1086,7 @@ class Alphafold2(nn.Module):
                 layers.append(nn.ModuleList([
                     prenorm(InterceptAxialAttention(tensor_slice, ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_seq_kernels, dilations = 1)))),
                     prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-                    prenorm(ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_msa_kernels, dilations = next(dilations)))),
+                    prenorm(ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_msa_kernels, dilations = next(dilations), glu_gated = conv_glu_gated))),
                     prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
                 ]))
 
