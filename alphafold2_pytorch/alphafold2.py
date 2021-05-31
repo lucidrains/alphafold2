@@ -253,6 +253,44 @@ class KronInputWrapper(nn.Module):
 
         return out
 
+# convolutional blocks
+
+def same_padding(kernel, dilation):
+    return (kernel + (kernel - 1) * (dilation - 1)) // 4
+
+class HybridDimensionalConvBlock(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        kernels,
+        dilations,
+        expansion_factor = 2
+    ):
+        super().__init__()
+        self.convs = nn.ModuleList([])
+        dilations = cast_tuple(dilations, len(kernels))
+
+        for kernel, dilation in zip(kernels, dilations):
+            padding = tuple(map(partial(same_padding, dilation = dilation), kernel))
+
+            self.convs.append(nn.Sequential(
+                nn.Conv2d(dim, dim * expansion_factor, kernel, padding = padding),
+                nn.GELU(),
+                nn.Conv2d(dim * expansion_factor, dim, kernel, padding = padding),
+            ))
+
+    def forward(self, x, mask = None):
+        if exists(mask):
+            mask = rearrange(mask, 'b h w -> b () h w')
+            x.masked_fill_(~mask, 0.)
+
+        out = []
+        for conv in self.convs:
+            out.append(conv(x))
+
+        return sum(out)
+
 # feed forward
 
 class DepthWiseConv2d(nn.Module):

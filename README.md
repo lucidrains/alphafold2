@@ -648,3 +648,17 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     month   = {Jul}
 }
 ```
+
+```bibtex
+@article {Si2021.05.10.443415,
+    author  = {Si, Yunda and Yan, Chengfei},
+    title   = {Improved protein contact prediction using dimensional hybrid residual networks and singularity enhanced loss function},
+    elocation-id = {2021.05.10.443415},
+    year    = {2021},
+    doi     = {10.1101/2021.05.10.443415},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415},
+    eprint  = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415.full.pdf},
+    journal = {bioRxiv}
+}
+```
