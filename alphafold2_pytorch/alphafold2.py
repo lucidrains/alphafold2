@@ -1007,7 +1007,7 @@ class Alphafold2(nn.Module):
                 raise ValueError(f'cannot find attention type {attn_type}')
 
             layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn))),
+                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = layer_sparse_attn, row_attn = row_attn, col_attn = col_attn))),
                 prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
                 prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
                 prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
