@@ -20,6 +20,7 @@ from alphafold2_pytorch.rotary import DepthWiseConv1d, AxialRotaryEmbedding, Fix
 from se3_transformer_pytorch import SE3Transformer
 from se3_transformer_pytorch.utils import torch_default_dtype, fourier_encode
 from en_transformer import EnTransformer
+from egnn_pytorch import EGNN_Network
 
 from performer_pytorch import FastAttention, ProjectionUpdater
 
@@ -32,12 +33,19 @@ Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
 def exists(val):
     return val is not None
 
+def maybe(fn):
+    def inner(t, *args, **kwargs):
+        if not exists(t):
+            return None
+        return fn(t, *args, **kwargs)
+    return inner
+
 def default(val, d):
     if exists(val):
         return val
     return d() if isfunction(d) else d
 
-def cast_tuple(val, depth):
+def cast_tuple(val, depth = 1):
     return val if isinstance(val, tuple) else (val,) * depth
 
 # helper classes
@@ -180,7 +188,7 @@ class InterceptAttention(nn.Module):
                 mask = mask[slice_tuple]
                 mask = rearrange(mask, 'b ... -> b (...)')
 
-        attn_output = attn(x, c, *args, mask = mask, context_mask = context_mask, **kwargs)
+        attn_output = attn(x, c, *args, shape = shape, context_shape = context_shape, mask = mask, context_mask = context_mask, **kwargs)
 
         if context:
             return attn_output
@@ -188,6 +196,119 @@ class InterceptAttention(nn.Module):
         attn_output = attn_output.view(output_subset_shape)
         output[slice_tuple] = attn_output
         return rearrange(output, 'b ... d -> b (...) d')
+
+# kronecker attention wrapper
+
+def norm_shape(shape): # hack to squeeze out extra dimension for templates
+    if len(shape) == 5:
+        return torch.Size([shape[0], *shape[2:]])
+    return shape
+
+def kron_operator(t, shape, mask = None, fn = torch.sum):
+    if exists(mask):
+        t = t.masked_fill_(~mask[..., None], 0.)
+
+    t = t.reshape(*shape)
+    t = torch.cat((fn(t, dim = 2), fn(t, dim = 1)), dim = 1)
+
+    if exists(mask):
+        mask = mask.reshape(*shape[:-1])
+        mask = torch.cat((mask.any(dim = 2), mask.any(dim = 1)), dim = 1)
+
+    return t, mask
+
+class KronInputWrapper(nn.Module):
+    def __init__(
+        self,
+        fn,
+        kron_queries = False,
+        kron_context = False
+    ):
+        super().__init__()
+        self.fn = fn
+        self.kron_queries = kron_queries
+        self.kron_context = kron_context
+
+    def forward(self, x, context, *args, shape = None, context_shape = None, mask = None, context_mask = None, rotary_emb = None, **kwargs):
+        assert not (self.kron_queries and not exists(shape)), 'shape for input must be given if queries are to be kroneckered'
+        assert not (self.kron_context and not exists(context_shape)), 'shape for context must be given if context are to be kroneckered'
+
+        shape, context_shape = map(norm_shape, (shape, context_shape))
+
+        if self.kron_queries or self.kron_context:
+            rotary_emb = None # turn off rotary embeddings if kron is being used, for now
+
+        if self.kron_context:
+            context, context_mask = kron_operator(context, context_shape, context_mask)
+
+        if self.kron_queries:
+            x, mask = kron_operator(x, shape, mask)
+
+        out = self.fn(x, context, *args, mask = mask, context_mask = context_mask, rotary_emb = rotary_emb, **kwargs)
+
+        if self.kron_queries:
+            out_h, out_w = out.split(shape[1:3], dim = 1)
+            out = rearrange(out_h, 'b h d -> b h () d') + rearrange(out_w, 'b w d -> b () w d')
+            out = rearrange(out, 'b ... d -> b (...) d')
+
+        return out
+
+# convolutional blocks
+
+def same_padding(kernel, dilation):
+    return (kernel + (kernel - 1) * (dilation - 1)) // 2
+
+class ReshapeForConv(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x, shape, mask = None, **kwargs):
+        shape = norm_shape(shape)
+        x = x.view(*shape)
+        x = rearrange(x, 'b h w c -> b c h w')
+
+        if exists(mask):
+            mask = mask.view(*shape[:-1])
+
+        x = self.fn(x, mask = mask)
+        x = rearrange(x, 'b c h w -> b (h w) c')
+        return x
+
+class HybridDimensionalConvBlock(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        kernels,
+        dilations,
+        expansion_factor = 2,
+        glu_gated = False
+    ):
+        super().__init__()
+        self.convs = nn.ModuleList([])
+        dilations = cast_tuple(dilations, len(kernels))
+
+        for kernel, dilation in zip(kernels, dilations):
+            padding = tuple(map(partial(same_padding, dilation = dilation), kernel))
+            mult = 2 if glu_gated else 1
+
+            self.convs.append(nn.Sequential(
+                nn.Conv2d(dim, dim * expansion_factor * mult, kernel, padding = padding),
+                nn.GELU() if not glu_gated else nn.GLU(dim = 1),
+                nn.Conv2d(dim * expansion_factor, dim, kernel, padding = padding),
+            ))
+
+    def forward(self, x, mask = None):
+        if exists(mask):
+            mask = rearrange(mask, 'b h w -> b () h w')
+            x.masked_fill_(~mask, 0.)
+
+        out = []
+        for conv in self.convs:
+            out.append(conv(x))
+
+        return sum(out)
 
 # feed forward
 
@@ -401,6 +522,7 @@ class LinearAttention(Attention):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
+            v = apply_rotary_pos_emb(v, rot_k)
 
         # linear attention masking
 
@@ -466,6 +588,7 @@ class SparseAttention(Attention):
             rot_q, rot_k = cast_tuple(rotary_emb, 2)
             q = apply_rotary_pos_emb(q, rot_q)
             k = apply_rotary_pos_emb(k, rot_k)
+            v = apply_rotary_pos_emb(v, rot_k)
 
         key_pad_mask = None
         if exists(mask):
@@ -643,6 +766,7 @@ class CoordModuleMDS(nn.Module):
     def forward(
         self,
         *,
+        seq,
         distance_pred,
         trunk_embeds,
         N_mask,
@@ -650,7 +774,7 @@ class CoordModuleMDS(nn.Module):
         C_mask,
         cloud_mask,
         bb_flat_mask_crossed,
-        num_backbone_atoms
+        atom_mask
     ):
         if self.predict_real_value_distances:
             distances, distance_std = distance_pred.unbind(dim = -1)
@@ -677,7 +801,7 @@ class CoordModuleMDS(nn.Module):
 
         coords = rearrange(coords_3d, 'b c n -> b n c')
         # will init all sidechain coords to cbeta if present else c_alpha
-        coords = sidechain_container(coords, n_aa = num_backbone_atoms, cloud_mask = cloud_mask)
+        coords = sidechain_container(seq, coords, atom_mask = atom_mask, cloud_mask = cloud_mask)
         coords = rearrange(coords, 'b n l d -> b (n l) d')
 
         return coords
@@ -685,9 +809,10 @@ class CoordModuleMDS(nn.Module):
 # main class
 
 class SequentialSequence(nn.Module):
-    def __init__(self, blocks):
+    def __init__(self, blocks, block_types):
         super().__init__()
         self.blocks = blocks
+        self.block_types = block_types
 
     def forward(
         self,
@@ -703,25 +828,42 @@ class SequentialSequence(nn.Module):
         msa_to_seq_pos_emb = None,
         **kwargs
     ):
-        for ((attn, ff, msa_attn), (cross_attn, msa_ff, msa_cross_attn)) in zip(*[iter(self.blocks)] * 2):
+        for block, block_type in zip(self.blocks, self.block_types):
+            if block_type == 'self':
+                attn, ff, msa_attn, msa_ff = block
 
-            # self attention
+                # self attention
 
-            x = attn(x, shape = seq_shape, mask = mask, rotary_emb = seq_pos_emb) + x
+                x = attn(x, shape = seq_shape, mask = mask, rotary_emb = seq_pos_emb) + x
+                x = ff(x, shape = seq_shape) + x
 
-            if exists(m):
-                m = msa_attn(m, shape = msa_shape, mask = msa_mask, rotary_emb = msa_pos_emb) + m
+                if exists(m):
+                    m = msa_attn(m, shape = msa_shape, mask = msa_mask, rotary_emb = msa_pos_emb) + m
+                    m = msa_ff(m) + m
+
+            elif block_type == 'conv':
+                conv, ff, msa_conv, msa_ff = block
+
+                # convolutions
+
+                x = conv(x, shape = seq_shape, mask = mask) + x
+                x = ff(x, shape = seq_shape) + x
+
+                if exists(m):
+                    m = msa_conv(m, shape = msa_shape, mask = msa_mask) + m
+                    m = msa_ff(m) + m
+
+
+            elif block_type == 'cross' and exists(m):
+
+                cross_attn, msa_ff, msa_cross_attn, ff = block
 
                 # cross attention
 
                 x = cross_attn(x, m, mask = mask, context_mask = msa_mask, shape = seq_shape, context_shape = msa_shape, rotary_emb = seq_to_msa_pos_emb) + x
                 m = msa_cross_attn(m, x, mask = msa_mask, context_mask = mask, shape = msa_shape, context_shape = seq_shape, rotary_emb = msa_to_seq_pos_emb) + m
 
-            # feedforwards
-
-            x = ff(x, shape = seq_shape) + x
-
-            if exists(m):
+                x = ff(x, shape = seq_shape) + x
                 m = msa_ff(m) + m
 
         return x, m
@@ -747,15 +889,17 @@ class Alphafold2(nn.Module):
         cross_attn_compress_ratio = 1,
         msa_tie_row_attn = False,
         template_attn_depth = 2,
-        num_backbone_atoms = 1,                # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
+        atoms = 'backbone-only',               # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
+        refine_coords = False,                 # don't start refiners if false
         predict_real_value_distances = False,
         trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         se3_edges_fourier_encodings = 4,       # number of fourier encodings for se3 edges
         return_aux_logits = False,
-        use_se3_transformer = True,            # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
+        template_embedder_type = 'en',         # use E(n) Transformer for embedding templates
+        structure_module_type = 'se3',         # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
         structure_module_depth = 1,
         structure_module_heads = 1,
@@ -763,18 +907,26 @@ class Alphafold2(nn.Module):
         structure_module_refinement_iters = 2,
         structure_module_knn = 2,
         structure_module_adj_neighbors = 2,
+        structure_module_adj_dim = 4,
         cross_attn_linear = False,
         cross_attn_linear_projection_update_every = 1000,
+        cross_attn_kron_primary = False,
+        cross_attn_kron_msa = False,
+        use_conv = False,
+        dilations = (1,),
+        conv_seq_kernels = ((9, 1), (1, 9), (3, 3)),
+        conv_msa_kernels = ((1, 9), (3, 3)),
+        conv_glu_gated = False,
         disable_token_embed = False,
         disable_cross_attn_rotary = False,
         structure_num_global_nodes = 0,
         mds_iters = 5,                          # mds coupling related parameters
         use_eigen_mds = False,
-        coords_module = None                    # custom coords generation module
+        coords_module = None,                   # custom coords generation module
+        custom_block_types = None,
+        num_custom_blocks = 1
     ):
         super().__init__()
-        assert num_backbone_atoms in {1, 3, 4}, 'must be either residue level, or reconstitute to atomic coordinates of 3 for the C, Ca, N of backbone, or 4 of C-beta as well'
-
         self.dim = dim
 
         # token embedding
@@ -809,30 +961,36 @@ class Alphafold2(nn.Module):
 
         self.return_aux_logits = return_aux_logits
 
-        # template sidechain encoding
+        # template sidechain encoding - only if needed
 
-        self.use_se3_transformer = use_se3_transformer
+        self.template_embedder_type = template_embedder_type
 
-        if use_se3_transformer:
-            self.template_sidechain_emb = SE3TemplateEmbedder(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                num_neighbors = 12,
-                depth = 4,
-                input_degrees = 2,
-                num_degrees = 2,
-                output_degrees = 1,
-                reversible = True
-            )
-        else:
-            self.template_sidechain_emb = EnTransformer(
-                dim = dim,
-                dim_head = dim,
-                heads = 1,
-                num_nearest_neighbors = 32,
-                depth = 4
-            )
+        if isinstance(template_embedder_type, str): 
+            if template_embedder_type == 'se3':
+                self.template_sidechain_emb = SE3TemplateEmbedder(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    num_neighbors = 12,
+                    depth = 4,
+                    input_degrees = 2,
+                    num_degrees = 2,
+                    output_degrees = 1,
+                    reversible = True,
+                    tie_key_values = True,
+                    one_headed_key_values = True,
+                    num_positions = max_seq_len
+                )
+            elif template_embedder_type == 'en':
+                self.template_sidechain_emb = EnTransformer(
+                    dim = dim,
+                    dim_head = dim,
+                    heads = 1,
+                    neighbors = 32,
+                    depth = 4
+                )
+            else:
+                raise ValueError('template embedder type must be either "se3" or "en"')
 
         # custom embedding projection
 
@@ -840,8 +998,13 @@ class Alphafold2(nn.Module):
 
         # attention types
 
-        layers_sparse_attn = cast_tuple(sparse_self_attn, depth)
-        layers_cross_attn_linear = cast_tuple(cross_attn_linear, depth)
+        layers_sparse_attn = cycle(cast_tuple(sparse_self_attn))
+
+        cross_attn_linear = cast_tuple(cross_attn_linear)
+        has_linear_attn = any(cross_attn_linear)
+        self.has_linear_attn = has_linear_attn
+
+        layers_cross_attn_linear = cycle(cross_attn_linear)
 
         # main trunk modules
 
@@ -849,70 +1012,120 @@ class Alphafold2(nn.Module):
         prenorm_cross = partial(PreNormCross, dim)
 
         layers = nn.ModuleList([])
-        attn_types = islice(cycle(attn_types), depth)
+        attn_types = cycle(attn_types)
 
-        for ind, layer_sparse_attn, layer_cross_attn_linear, attn_type in zip(range(depth), layers_sparse_attn, layers_cross_attn_linear, attn_types):
+        if not exists(custom_block_types):
+            default_block_types = ('self', 'cross')
 
-            # alternate between row and column attention to save memory each layer
+            if use_conv: # convolutional settings
+                default_block_types = ('conv', *default_block_types)
 
-            row_attn = ind % 2 == 0
-            col_attn = ind % 2 == 1
+            block_types = islice(cycle(default_block_types), depth * 2)
+        else:
+            block_types = islice(cycle(custom_block_types), num_custom_blocks * len(custom_block_types))
 
-            # self attention, for main sequence, msa, and optionally, templates
+        # setup alternating configs
 
+        dilations = cycle(cast_tuple(dilations))
+        row_attn = cycle([True, False])
+        col_attn = cycle([False, True])
+
+        for block_type in block_types:
             ff_tensor_slice = (slice(None), slice(0, 1))
+            if block_type == 'self':
 
-            if attn_type == 'full':
-                tensor_slice = None
-                template_axial_attn = True
-            elif attn_type == 'intra_attn':
-                tensor_slice = None
-                template_axial_attn = False
-            elif attn_type == 'seq_only':
+                # self attention, for main sequence, msa, and optionally, templates
+
+                attn_type = next(attn_types)
+                layer_sparse_attn = next(layers_sparse_attn)
+
+                if attn_type == 'full':
+                    tensor_slice = None
+                    template_axial_attn = True
+                elif attn_type == 'intra_attn':
+                    tensor_slice = None
+                    template_axial_attn = False
+                elif attn_type == 'seq_only':
+                    tensor_slice = (slice(None), slice(0, 1))
+                    template_axial_attn = False
+                else:
+                    raise ValueError(f'cannot find attention type {attn_type}')
+
+                layers.append(nn.ModuleList([
+                    prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = layer_sparse_attn, row_attn = next(row_attn), col_attn = next(col_attn)))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                    prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                ]))
+
+            elif block_type == 'cross':
+                # cross attention, for main sequence -> msa and then msa -> sequence
+
+                intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
+                layer_cross_attn_linear = next(layers_cross_attn_linear)
+
+                if layer_cross_attn_linear:
+                    cross_attn_fn = lambda: LinearAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
+                else:
+                    cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
+
+                layers.append(nn.ModuleList([
+                    intercept_fn(context = False, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_queries = cross_attn_kron_primary, kron_context = cross_attn_kron_msa))),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                    intercept_fn(context = True, attn = prenorm_cross(KronInputWrapper(cross_attn_fn(), kron_context = cross_attn_kron_primary, kron_queries = cross_attn_kron_msa))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                ]))
+
+            elif block_type == 'conv':
+                # self attention, for main sequence, msa, and optionally, templates
+
                 tensor_slice = (slice(None), slice(0, 1))
-                template_axial_attn = False
+
+                layers.append(nn.ModuleList([
+                    prenorm(InterceptAxialAttention(tensor_slice, ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_seq_kernels, dilations = 1)))),
+                    prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
+                    prenorm(ReshapeForConv(HybridDimensionalConvBlock(dim = dim, kernels = conv_msa_kernels, dilations = next(dilations), glu_gated = conv_glu_gated))),
+                    prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
+                ]))
+
             else:
-                raise ValueError(f'cannot find attention type {attn_type}')
-
-            layers.append(nn.ModuleList([
-                prenorm(InterceptAxialAttention(tensor_slice, AxialAttention(dim = dim, template_axial_attn = template_axial_attn, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, sparse_attn = sparse_self_attn, row_attn = row_attn, col_attn = col_attn))),
-                prenorm(InterceptFeedForward(ff_tensor_slice, ff = LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-                prenorm(AxialAttention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, tie_row_attn = msa_tie_row_attn, row_attn = row_attn, col_attn = col_attn)),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-            ]))
-
-            # cross attention, for main sequence -> msa and then msa -> sequence
-
-            intercept_fn = partial(InterceptAttention, (slice(None), slice(0, 1)))
-
-            if layer_cross_attn_linear:
-                cross_attn_fn = lambda: LinearAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
-            else:
-                cross_attn_fn = lambda: Attention(dim = dim, seq_len = max_seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, compress_ratio = cross_attn_compress_ratio)
-
-            layers.append(nn.ModuleList([
-                intercept_fn(context = False, attn = prenorm_cross(cross_attn_fn())),
-                prenorm(FeedForward(dim = dim, dropout = ff_dropout)),
-                intercept_fn(context = True, attn = prenorm_cross(cross_attn_fn())),
-                prenorm(InterceptFeedForward(ff_tensor_slice, LocalFeedForward(dim = dim, hidden_dim = dim * 4, dropout = ff_dropout))),
-            ]))
-
-        if not reversible:
-            layers = nn.ModuleList(list(map(lambda t: t[:3], layers))) # remove last feed forward if not reversible
+                raise ValueError(f'invalid block type ({block_type})')
 
         trunk_class = SequentialSequence if not reversible else ReversibleSequence
-        self.net = trunk_class(layers)
+        self.net = trunk_class(layers, block_types)
 
         # updating linear attention projections, if there exists linear attention
 
-        self.has_linear_attn = any(layers_cross_attn_linear)
         if self.has_linear_attn:
             self.proj_updater = ProjectionUpdater(self.net, cross_attn_linear_projection_update_every)
 
+        # atom masking
+
+        if atoms == 'backbone-only':
+            atom_mask = torch.tensor([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'backbone-with-cbeta':
+            atom_mask = torch.tensor([1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'all':
+            atom_mask = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+        elif atoms == 'backbone-with-oxygen':
+            atom_mask = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif atoms == 'backbone-with-cbeta-and-oxygen':
+            atom_mask = torch.tensor([1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        elif torch.is_tensor(atoms):
+            atom_mask = atoms
+        else:
+            raise ValueError('atoms needs to be a valid string or a mask tensor of shape (14,) ')
+
+        self.num_atoms = atom_mask.sum(-1).item()
+
+        assert tuple(atom_mask.shape) == (constants.NUM_COORDS_PER_RES,), 'atoms needs to be of the correct shape (14,)'
+
+        self.register_buffer('atom_mask', atom_mask.bool())
+
         # to distogram output
 
-        self.num_backbone_atoms = num_backbone_atoms
-        needs_upsample = num_backbone_atoms > 1
+        trunk_upsample_factor = self.num_atoms
+        needs_upsample = trunk_upsample_factor > 1
 
         self.predict_real_value_distances = predict_real_value_distances
         dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
@@ -920,9 +1133,9 @@ class Alphafold2(nn.Module):
         self.to_distogram_logits = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Sequential(
-                nn.Linear(dim, dim * (num_backbone_atoms ** 2)),
+                nn.Linear(dim, dim * (trunk_upsample_factor ** 2)),
                 Rearrange('b h w c -> b c h w'),
-                nn.PixelShuffle(num_backbone_atoms),
+                nn.PixelShuffle(trunk_upsample_factor),
                 Rearrange('b c h w -> b h w c')
             ) if needs_upsample else nn.Identity(),
             nn.Linear(dim, dim_distance_pred)
@@ -947,13 +1160,14 @@ class Alphafold2(nn.Module):
         self.structure_num_global_nodes = structure_num_global_nodes
 
         if structure_num_global_nodes > 0:
-            assert use_se3_transformer, 'se3 transformer must be used in order to use global node token feature'
+            assert structure_module_type == 'se3', 'se3 transformer must be used in order to use global node token feature'
             self.global_queries = nn.Parameter(torch.randn(structure_num_global_nodes, dim))
             self.global_pool_attns.append(Attention(dim = dim))
             global_feats_dim = dim
 
         # to coordinate output
 
+        self.refine_coords = refine_coords
         self.predict_coords = predict_coords
         self.mds_iters = mds_iters
         self.structure_module_refinement_iters = structure_module_refinement_iters
@@ -966,12 +1180,12 @@ class Alphafold2(nn.Module):
 
         self.to_equivariant_net_edges = nn.Linear(dim, trunk_embeds_to_se3_edges) if trunk_embeds_to_se3_edges > 0 else None
 
-        if self.predict_coords:
+        if self.refine_coords:
             with torch_default_dtype(torch.float64):
                 self.structure_module_embeds = nn.Embedding(num_tokens, structure_module_dim)
                 self.atom_tokens_embed = nn.Embedding(len(ATOM_IDS), structure_module_dim)
 
-                if use_se3_transformer:
+                if structure_module_type == 'se3':
                     self.structure_module = SE3TransformerWrapper(
                         dim = structure_module_dim,
                         depth = structure_module_depth,
@@ -984,21 +1198,36 @@ class Alphafold2(nn.Module):
                         attend_sparse_neighbors = True,
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
-                        adj_dim = 4,
-                        global_feats_dim = global_feats_dim
+                        adj_dim = structure_module_adj_dim,
+                        global_feats_dim = global_feats_dim,
+                        tie_key_values = True,
+                        one_headed_key_values = True,
+                        num_positions = max_seq_len * 14 # hard code as 14 since residual to atom is not flexible atm
                     )
-                else:
+                elif structure_module_type == 'en':
                     self.structure_module = EnTransformer(
                         dim = structure_module_dim,
                         depth = structure_module_depth,
                         heads = structure_module_heads,
-                        fourier_features = 2,
-                        num_nearest_neighbors = 0,
+                        rel_pos_emb = True,
+                        neighbors = 0,
                         only_sparse_neighbors = True,
                         edge_dim = edge_dim,
                         num_adj_degrees = structure_module_adj_neighbors,
                         adj_dim = 4
                     )
+                elif structure_module_type == 'egnn':
+                    self.structure_module = EGNN_Network(
+                        dim = structure_module_dim,
+                        depth = structure_module_depth,
+                        num_positions = max_seq_len * 14, # hard code as 14 since residual to atom is not flexible atm
+                        edge_dim = edge_dim,
+                        num_adj_degrees = structure_module_adj_neighbors,
+                        adj_dim = structure_module_adj_dim,
+                        coor_weights_clamp_value = 2.
+                    )
+                else:
+                    raise ValueError('structure module must be either "se3", "en", or "egnn" for SE3 Transformers, E(n)-Transformers, or EGNN respectively')
 
         # aux confidence measure
         self.lddt_linear = nn.Linear(structure_module_dim, 1)
@@ -1023,7 +1252,8 @@ class Alphafold2(nn.Module):
         templates_sidechains = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False
+        return_confidence = False,
+        refine = True
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -1102,14 +1332,14 @@ class Alphafold2(nn.Module):
             # todo (make efficient)
 
             if exists(templates_sidechains):
-                if self.use_se3_transformer:
+                if self.template_embedder_type == 'se3':
                     t_seq = self.template_sidechain_emb(
                         t_seq,
                         templates_sidechains,
                         templates_coors,
                         mask = templates_mask
                     )
-                else:
+                elif self.template_embedder_type == 'en':
                     shape = t_seq.shape
                     t_seq = rearrange(t_seq, 'b t n d -> (b t) n d')
                     templates_coors = rearrange(templates_coors, 'b t n c -> (b t) n c')
@@ -1218,19 +1448,18 @@ class Alphafold2(nn.Module):
 
         # prepare mask for backbone coordinates
 
-        assert self.num_backbone_atoms > 1, 'must constitute to at least 3 atomic coordinates for backbone'
-
-        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_backbone_atoms)
+        N_mask, CA_mask, C_mask = scn_backbone_mask(seq, boolean = True, n_aa = self.num_atoms)
 
         cloud_mask = scn_cloud_mask(seq, boolean = True)
         flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
         chain_mask = (mask.unsqueeze(-1) * cloud_mask)
         flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
 
-        bb_flat_mask = rearrange(chain_mask[..., :self.num_backbone_atoms], 'b l c -> b (l c)')
+        bb_flat_mask = rearrange(chain_mask[..., :self.num_atoms], 'b l c -> b (l c)')
         bb_flat_mask_crossed = rearrange(bb_flat_mask, 'b i -> b i ()') * rearrange(bb_flat_mask, 'b j -> b () j')
 
         coords = self.trunk_to_coords(
+            seq = seq, 
             distance_pred = distance_pred,
             trunk_embeds = trunk_embeds,
             N_mask = N_mask,
@@ -1238,17 +1467,18 @@ class Alphafold2(nn.Module):
             C_mask = C_mask,
             cloud_mask = cloud_mask,
             bb_flat_mask_crossed = bb_flat_mask_crossed,
-            num_backbone_atoms = self.num_backbone_atoms
+            atom_mask = self.atom_mask
         )
 
-        # derive nodes
+        if not self.refine_coords or not refine: 
+            return coords
 
-        num_atoms_per_residue = coords.shape[-2] // seq.shape[1]
+        # derive nodes
 
         structure_embed = self.trunk_to_structure_dim(trunk_embeds)
         x = reduce(structure_embed, 'b i j d -> b i d', 'mean')
         x += self.structure_module_embeds(seq)
-        x = repeat(x, 'b n d -> b n l d', l = num_atoms_per_residue)
+        x = repeat(x, 'b n d -> b n l d', l = constants.NUM_COORDS_PER_RES)
 
         atom_tokens = scn_atom_embedd(seq)
         x += self.atom_tokens_embed(atom_tokens)
@@ -1261,8 +1491,7 @@ class Alphafold2(nn.Module):
         if exists(self.to_equivariant_net_edges):
             edges = self.to_equivariant_net_edges(trunk_embeds)
             edges = fourier_encode(edges, num_encodings = self.se3_edges_fourier_encodings, include_self = True)
-            edges = repeat(edges, 'b i j d -> b (i l) (j m) d', l = num_atoms_per_residue, m = num_atoms)
-            edges = edges.double()
+            edges = repeat(edges, 'b i j d -> b (i l1) (j l2) d', l1 = constants.NUM_COORDS_PER_RES, l2 = constants.NUM_COORDS_PER_RES)
 
         # derive adjacency matrix
         # todo - fix so Cbeta is connected correctly
@@ -1284,10 +1513,24 @@ class Alphafold2(nn.Module):
             pooled_feats = pooled_feats.double()
             structure_kwargs = {'global_feats': pooled_feats}
 
+        # prepare only atoms defined by atom mask
+
+        atom_mask = repeat(self.atom_mask, 'a -> () (n a)', n = n)
+        atom_mask_crossed = atom_mask[:, :, None] & atom_mask[:, None, :]
+        total_atoms = self.num_atoms * n
+
+        coords  = coords.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
+        x       = x.masked_select(atom_mask[..., None]).reshape(b, total_atoms, -1)
+        adj_mat = adj_mat.masked_select(atom_mask_crossed).reshape(b, total_atoms, total_atoms)
+        flat_chain_mask = flat_chain_mask.masked_select(atom_mask).reshape(b, total_atoms)
+
+        if exists(edges):
+            edges   = edges.masked_select(atom_mask_crossed[..., None]).reshape(b, total_atoms, total_atoms, -1)
+
         # prepare float64 precision for equivariance
 
         original_dtype = coords.dtype
-        x, coords = map(lambda t: t.double(), (x, coords))
+        x, coords, edges = map(maybe(lambda t: t.double()), (x, coords, edges))
 
         # iterative refinement with equivariant transformer in high precision
 

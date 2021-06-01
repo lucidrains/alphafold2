@@ -19,6 +19,9 @@ from sidechainnet.utils.measure import GLOBAL_PAD_CHAR
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES, BB_BUILD_INFO, SC_BUILD_INFO
 from sidechainnet.structure.StructureBuilder import _get_residue_build_iter
 
+# custom
+import mp_nerf
+
 # build vocabulary
 
 VOCAB = ProteinVocabulary()
@@ -107,7 +110,7 @@ def get_atom_ids_dict():
 
 def make_cloud_mask(aa):
     """ relevent points will be 1. paddings will be 0. """
-    mask = np.zeros(14)
+    mask = np.zeros(constants.NUM_COORDS_PER_RES)
     # early stop if padding token
     if aa == "_":
         return mask
@@ -118,7 +121,7 @@ def make_cloud_mask(aa):
 
 def make_atom_id_embedds(aa, atom_ids):
     """ Return the tokens for each atom in the aa. """
-    mask = np.zeros(14)
+    mask = np.zeros(constants.NUM_COORDS_PER_RES)
     # early stop if padding token
     if aa == "_":
         return mask
@@ -307,7 +310,7 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     """
     # use MSA transformer
     REPR_LAYER_NUM = 12
-    device = embedd_model.device
+    device = seq.device
     max_seq_len = msa.shape[-1]
     embedd_inputs = ids_to_embed_input(msa.cpu().tolist())
 
@@ -315,7 +318,7 @@ def get_msa_embedd(msa, embedd_model, batch_converter, device = None):
     with torch.no_grad():
         results = embedd_model(msa_batch_tokens.to(device), repr_layers=[REPR_LAYER_NUM], return_contacts=False)
     # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:, :]
+    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:max_seq_len+1, :]
     return token_reps
 
 def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
@@ -329,7 +332,7 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
             * embedd_dim: number of embedding dimensions. 1280 for ESM-1b
     """
     # use ESM transformer
-    device = embedd_model.device
+    device = seq.device
     REPR_LAYER_NUM = 33
     max_seq_len = seq.shape[-1]
     embedd_inputs = ids_to_embed_input(seq.cpu().tolist())
@@ -338,8 +341,47 @@ def get_esm_embedd(seq, embedd_model, batch_converter, msa_data=None):
     with torch.no_grad():
         results = embedd_model(batch_tokens.to(device), repr_layers=[REPR_LAYER_NUM], return_contacts=False)
     # index 0 is for start token. so take from 1 one
-    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:, :].unsqueeze(dim=1)
+    token_reps = results["representations"][REPR_LAYER_NUM][..., 1:max_seq_len+1, :].unsqueeze(dim=1)
     return token_reps
+
+
+def get_t5_embedd(seq, tokenizer, encoder, msa_data=None, device=None):
+    """ Returns the ProtT5-XL-U50 embeddings for a protein.
+        Inputs:
+        * seq: ( (b,) L,) tensor of ints (in sidechainnet int-char convention)
+        * tokenizer:  tokenizer model: T5Tokenizer
+        * encoder: encoder model: T5EncoderModel
+                 ex: from transformers import T5EncoderModel, T5Tokenizer
+                     model_name = "Rostlab/prot_t5_xl_uniref50"
+                     tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False )
+                     model = T5EncoderModel.from_pretrained(model_name)
+                     # prepare model 
+                     model = model.to(device)
+                     model = model.eval()
+                     if torch.cuda.is_available():
+                         model = model.half()
+        Outputs: tensor of (batch, n_seqs, L, embedd_dim)
+            * n_seqs: number of sequences in the MSA. 1 for T5 models
+            * embedd_dim: number of embedding dimensions. 1024 for T5 models
+    """
+    # get params and prepare
+    device = seq.device if device is None else device
+    embedd_inputs = ids_to_prottran_input(seq.cpu().tolist())
+    
+    # embedd - https://huggingface.co/Rostlab/prot_t5_xl_uniref50
+    inputs_embedding = []
+    shift_left, shift_right = 0, -1
+    ids = tokenizer.batch_encode_plus(embedd_inputs, add_special_tokens=True,
+                                                     padding=True, 
+                                                     return_tensors="pt")
+    with torch.no_grad():
+        embedding = encoder(input_ids=torch.tensor(ids['input_ids']).to(device), 
+                            attention_mask=torch.tensor(ids["attention_mask"]).to(device))
+    # return (batch, seq_len, embedd_dim)
+    token_reps = embedding.last_hidden_state[:, shift_left:shift_right].to(device)
+    token_reps = expand_dims_to(token_reps, 4-len(token_reps.shape))
+    return token_reps.float()
+
 
 def get_all_protein_ids(dataloader, verbose=False):
     """ Given a sidechainnet dataloader for a CASP version, 
@@ -384,7 +426,7 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     scn_seq = expand_dims_to(scn_seq, 2 - len(scn_seq.shape))
     # early check for coords mask
     if coords is not None: 
-        batch_mask = ( rearrange(coords, '... (l c) d -> ... l c d', c=14) == 0 ).sum(dim=-1) < coords.shape[-1]
+        batch_mask = ( rearrange(coords, '... (l c) d -> ... l c d', c=constants.NUM_COORDS_PER_RES) == 0 ).sum(dim=-1) < coords.shape[-1]
         if boolean:
             return batch_mask.bool()
         else: 
@@ -396,10 +438,10 @@ def scn_cloud_mask(scn_seq, boolean=True, coords=None):
     scn_seq = scn_seq.cpu().tolist()
     for i, seq in enumerate(scn_seq):
         # get masks for each prot (points for each aa)
-        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa)]['cloud_mask'] \
-                                         for aa in seq]).bool().to(device).unsqueeze(0) )
+        batch_mask.append( torch.tensor([CUSTOM_INFO[VOCAB._int2char[aa]]['cloud_mask'] \
+                                         for aa in seq]).bool().to(device) )
     # concat in last dim
-    batch_mask = torch.cat(batch_mask, dim=0)
+    batch_mask = torch.stack(batch_mask, dim=0)
     # return mask (boolean or indexes)
     if boolean:
         return batch_mask.bool()
@@ -438,12 +480,79 @@ def scn_atom_embedd(scn_seq):
     device = scn_seq.device
     batch_tokens = []
     # do loop in cpu
-    scn_seq = scn_seq.cpu()
+    scn_seq = scn_seq.cpu().tolist()
     for i,seq in enumerate(scn_seq):
-        batch_tokens.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa.item())]["atom_id_embedd"] \
-                                           for aa in seq]).long().to(device).unsqueeze(0) )
-    batch_tokens = torch.cat(batch_tokens, dim=0)
+        batch_tokens.append( torch.tensor([CUSTOM_INFO[VOCAB.int2char(aa)]["atom_id_embedd"] \
+                                           for aa in seq]) )
+    batch_tokens = torch.stack(batch_tokens, dim=0).long().to(device)
     return batch_tokens
+
+def mat_input_to_masked(x, x_mask=None, edges_mat=None, edges=None, 
+                          edge_mask=None, edge_attr_mat=None, 
+                          edge_attr=None): 
+    """ Turns the padded input and edges + mask into the
+        non-padded inputs and edges.
+        At least one of (edges_mat, edges) must be provided. 
+        The same format for edges and edge_attr must be provided 
+        (either adj matrix form or flattened form).
+        Inputs: 
+        * x: ((batch), N, D) a tensor of N nodes and D dims for each one
+        * x_mask: ((batch), N,) boolean mask for x
+        * edges: (2, E) optional. indices of the corresponding adjancecy matrix. 
+        * edges_mat: ((batch), N, N) optional. adjacency matrix for x
+        * edge_mask: optional. boolean mask of the same shape of either "edge_mat" or "edges".
+        * edge_attr: (E, D_edge) optional. edge attributes of D_edge dims.
+        * edge_attr_mat: ((batch), N, N) optional. adjacency matrix with features 
+        Outputs: 
+        * x: (N_, D) the masked node features
+        * edge_index: (2, E_) the masked x-indices for the edges
+        * edge_attr: (E_, D_edge) the masked edge attributes 
+        * batch: (N_,) the corresponding index in the batch for each node 
+    """
+    # collapse batch dimension
+    if len(x.shape) == 3:
+        batch_dim = x.shape[1] 
+        # collapse for x and its mask
+        x = rearrange(x, 'b n d ... -> (b n) d ...')
+        if x_mask is not None:
+            x_mask = rearrange(x_mask, 'b n ... -> (b n) ...')
+        else: 
+            x_mask = torch.ones_like(x[..., 0]).bool()
+
+        # collapse for edge indexes and attributes if needed
+        if edges_mat is not None and edges is None:
+            edges = torch.nonzero(edges_mat, as_tuple=False).t()
+            edges = edges[1:] + edges[:1]*batch_dim
+        # get the batch identifier for each node
+        batch = (torch.arange(x.shape[0], device=x.device) // batch_dim)[x_mask]
+    else:
+        # edges to indices format
+        if edges_mat is not None and edges is None:
+            edges = torch.nonzero(edges_mat, as_tuple=False).t()
+        # get the batch identifier for each node
+        batch = torch.zeros(x.shape[0], device=x.device).to(x.device)
+
+    # adapt edge attrs if provided
+    if edge_attr_mat is not None and edge_attr is None: 
+            edge_attr = edge_attr[edges_mat.bool()]
+    # gen edge_mask if not provided
+    if edge_mask is None:
+        edge_mask = torch.ones_like(edges[-1]).bool()
+
+    # begin applying masks
+    x = x[x_mask]
+    # process edge indexes: get square mat and remove all non-coding atoms
+    max_num = edges.max().item()+1
+    wrapper = torch.zeros(max_num, max_num).to(x.device)
+    wrapper[edges[0][edge_mask], edges[1][edge_mask]] = 1
+    wrapper = wrapper[x_mask, :][:, x_mask]
+    edge_index = torch.nonzero(wrapper, as_tuple=False).t()
+    # process edge attr
+    edge_attr = edge_attr[edge_mask] if edge_attr is not None else None
+    
+    return x, edge_index, edge_attr, batch
+
+
 
 def nth_deg_adjacency(adj_mat, n=1, sparse=False):
     """ Calculates the n-th degree adjacency matrix.
@@ -476,140 +585,125 @@ def nth_deg_adjacency(adj_mat, n=1, sparse=False):
         if sparse:
             new_idxs, new_vals = torch_sparse.spspmm(new_idxs, new_vals, idxs, vals, m=m, k=k, n=n)
             new_vals = new_vals.bool().float()
-            new_adj_mat = torch.zeros_like(attr_mat)
-            new_adj_mat[new_idxs[0], new_idxs[1]] = new_vals
-            # sparse to dense is slower
-            # torch.sparse.FloatTensor(idxs, vals).to_dense()
+            # fill by indexes bc it's faster in sparse mode - will need an intersection function
+            previous = attr_mat[new_idxs[0], new_idxs[1]].bool().float()
+            attr_mat[new_idxs[0], new_idxs[1]] = (1 - previous)*(i+1)
         else:
             new_adj_mat = (new_adj_mat @ adj_mat).bool().float() 
-
-        attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
+            attr_mat.masked_fill( (new_adj_mat - attr_mat.bool().float()).bool(), i+1 )
 
     return new_adj_mat, attr_mat
 
-def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True):
+def prot_covalent_bond(seqs, adj_degree=1, cloud_mask=None, mat=True, sparse=False):
     """ Returns the idxs of covalent bonds for a protein.
         Inputs 
         * seq: (b, n) torch long.
         * adj_degree: int. adjacency degree
         * cloud_mask: mask selecting the present atoms.
-        * mat: whether to return as indexes or matrices. 
-               for indexes, only 1 seq is supported 
-        Outputs: edge_idxs, edge_attrs
+        * mat: whether to return as indexes of only atoms (PyG version)
+               or matrices of masked atoms (for batched training). 
+               for indexes, only 1 seq is supported.
+        * sparse: bool. whether to use torch_sparse for adj_mat calc
+        Outputs: edge_idxs, edge_types (degree of adjacency). 
     """
     device = seqs.device
-    # get starting poses for every aa
-    adj_mat = torch.zeros(seqs.shape[0], seqs.shape[1]*14, seqs.shape[1]*14)
-    # not needed to device since it's only for indices.
-    scaff = torch.zeros(seqs.shape[1], 14)
-    scaff[:, 0] = 1
-    idxs = torch.nonzero(scaff).reshape(-1)
-
-    for s,seq in enumerate(seqs): 
-        for i,idx in enumerate(idxs):
-            if i >= seq.shape[0]:
+    # set up container adj_mat (will get trimmed - less than 14)
+    next_aa = NUM_COORDS_PER_RES
+    adj_mat = torch.zeros(seqs.shape[0], *[seqs.shape[1]*NUM_COORDS_PER_RES]*2)
+    # not needed to device since it's only for indices
+    seq_list = seqs.cpu().tolist()
+    for s,seq in enumerate(seq_list): 
+        next_idx = 0
+        for i,idx in enumerate(seq):
+            aa_bonds = constants.AA_DATA[VOCAB._int2char[idx]]['bonds']
+            # if no edges -> padding token -> finish bond creation for this seq
+            if len(aa_bonds) == 0: 
                 break
+            # correct next position. for indexes functionality
+            next_aa = max(aa_bonds, key=lambda x: max(x))[-1]
             # offset by pos in chain ( intra-aa bonds + with next aa )
-            bonds = idx + torch.tensor( constants.AA_DATA[VOCAB.int2char(seq[i].item())]['bonds'] + [[2, 14]] ).t()
+            bonds = next_idx + torch.tensor( aa_bonds + [[2, next_aa]] ).t()
+            next_idx += next_aa
             # delete link with next if final AA in seq
-            if i == idxs.shape[0]-1:
+            if i == seqs.shape[1] - 1:
                 bonds = bonds[:, :-1]
             # modify adj mat
             adj_mat[s, bonds[0], bonds[1]] = 1
         # convert to undirected
         adj_mat[s] = adj_mat[s] + adj_mat[s].t()
         # do N_th degree adjacency
-        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=False) # True
+        adj_mat, attr_mat = nth_deg_adjacency(adj_mat, n=adj_degree, sparse=sparse)
 
     if mat: 
+        # return the full matrix/tensor
         return attr_mat.bool().to(seqs.device), attr_mat.to(device)
     else:
         edge_idxs = attr_mat[0].nonzero().t().long()
-        edge_attrs = attr_mat[0, edge_idxs[0], edge_idxs[1]]
-        return edge_idxs.to(seqs.device), edge_attrs.to(seqs.device)
+        edge_types = attr_mat[0, edge_idxs[0], edge_idxs[1]]
+        return edge_idxs.to(seqs.device), edge_types.to(seqs.device)
 
 
-def nerf_torch(a, b, c, l, theta, chi):
-    """ Custom Natural extension of Reference Frame. 
-        Inputs:
-        * a: (batch, 3) or (3,). point(s) of the plane, not connected to d
-        * b: (batch, 3) or (3,). point(s) of the plane, not connected to d
-        * c: (batch, 3) or (3,). point(s) of the plane, connected to d
-        * theta: (batch,) or (float).  angle(s) between b-c-d
-        * chi: (batch,) or float. dihedral angle(s) between the a-b-c and b-c-d planes
-        Outputs: d (batch, 3) or (3,). the next point in the sequence, linked to c
-    """
-    # safety check
-    if not ( (-np.pi <= theta) * (theta <= np.pi) ).all().item():
-        raise ValueError(f"theta(s) must be in radians and in [-pi, pi]. theta(s) = {theta}")
-    # calc vecs
-    ba = b-a
-    cb = c-b
-    # calc rotation matrix. based on plane normals and normalized
-    n_plane  = torch.cross(ba, cb, dim=-1)
-    n_plane_ = torch.cross(n_plane, cb, dim=-1)
-    rotate   = torch.stack([cb, n_plane_, n_plane], dim=-1)
-    rotate  /= torch.norm(rotate, dim=-2, keepdim=True)
-    # calc proto point, rotate
-    d = torch.stack([-torch.cos(theta),
-                      torch.sin(theta) * torch.cos(chi),
-                      torch.sin(theta) * torch.sin(chi)], dim=-1).unsqueeze(-1)
-    # extend base point, set length
-    return c + l.unsqueeze(-1) * torch.matmul(rotate, d).squeeze()
-
-def sidechain_container(backbones, n_aa, cloud_mask=None, place_oxygen=False,
-                        n_atoms=NUM_COORDS_PER_RES, padding=GLOBAL_PAD_CHAR):
+def sidechain_container(seqs, backbones, atom_mask, cloud_mask=None, padding_tok=20):
     """ Gets a backbone of the protein, returns the whole coordinates
         with sidechains (same format as sidechainnet). Keeps differentiability.
         Inputs: 
-        * backbones: (batch, L*3, 3): assume batch=1 (could be extended later).
-                    Coords for (N-term, C-alpha, C-term) of every aa.
-        * n_aa: int. number of points for each aa in the backbones.
+        * seqs: (batch, L) either tensor or list
+        * backbones: (batch, L*n_aa, 3): assume batch=1 (could be extended (?not tested)).
+                     Coords for (N-term, C-alpha, C-term, (c_beta)) of every aa.
+        * atom_mask: (14,). int or bool tensor specifying which atoms are passed.
         * cloud_mask: (batch, l, c). optional. cloud mask from scn_cloud_mask`.
-                      returns point outside to 0. if passed, else c_alpha
-        * place_oxygen: whether to claculate the oxygen of the
-                        carbonyl group via NeRF
-        * n_atoms: int. n of atom positions / atom. same as in sidechainnet: 14
-        * padding: int. padding token. same as in sidechainnet: 0
-        Outputs: whole coordinates of shape (batch, L, n_atoms, 3)
+                      sets point outside of mask to 0. if passed, else c_alpha
+        * padding: int. padding token. same as in sidechainnet: 20
+        Outputs: whole coordinates of shape (batch, L, 14, 3)
     """
+    atom_mask = atom_mask.bool().cpu().detach()
+    cum_atom_mask = atom_mask.cumsum(dim=-1).tolist()
+
     device = backbones.device
-    batch, length = backbones.shape[0], backbones.shape[1] // n_aa
-    # build scaffold from (N, CA, C, CB)
-    new_coords = torch.zeros(batch, length, NUM_COORDS_PER_RES, 3).to(device)
+    batch, length = backbones.shape[0], backbones.shape[1] // cum_atom_mask[-1]
     predicted  = rearrange(backbones, 'b (l back) d -> b l back d', l=length)
-    # set backbone positions
-    new_coords[:, :, :3] = predicted[:, :, :3]
-    # set rest of positions to c_beta if present, else c_alpha
-    if n_aa == 4:
-        new_coords[:, :, 4:] = repeat(predicted[:, :, -1], 'b l d -> b l scn d', scn=10)
-    else:
-        new_coords[:, :, 4:] = repeat(new_coords[:, :, 1], 'b l d -> b l scn d', scn=10)
+
+    # early check if whole chain is already pred
+    if cum_atom_mask[-1] == 14:
+        return predicted
+
+    # build scaffold from (N, CA, C, CB) - do in cpu
+    new_coords = torch.zeros(batch, length, constants.NUM_COORDS_PER_RES, 3)
+    predicted  = predicted.cpu() if predicted.is_cuda else predicted
+
+    # fill atoms if they have been passed
+    for i,atom in enumerate(atom_mask.tolist()):
+        if atom:
+            new_coords[:, :, i] = predicted[:, :, cum_atom_mask[i]-1]
+
+    # generate sidechain if not passed
+    for s,seq in enumerate(seqs): 
+        # format seq accordingly
+        if isinstance(seq, torch.Tensor):
+            padding = (seq == padding_tok).sum().item()
+            seq_str = ''.join([VOCAB._int2char[aa] for aa in seq.cpu().numpy()[:-padding or None]])
+        elif isinstance(seq, str):
+            padding = 0
+            seq_str = seq
+        # get scaffolds - will overwrite oxygen since its position is fully determined by N-C-CA
+        scaffolds = mp_nerf.proteins.build_scaffolds_from_scn_angles(seq_str, angles=None, device="cpu")
+        coords, _ = mp_nerf.proteins.sidechain_fold(wrapper = new_coords[s, :-padding or None].detach(),
+                                                    **scaffolds, c_beta = cum_atom_mask[4]==5)
+        # add detached scn
+        for i,atom in enumerate(atom_mask.tolist()):
+            if not atom:
+                new_coords[:, :-padding or None, i] = coords[:, i]
+
+    new_coords = new_coords.to(device)
     if cloud_mask is not None:
         new_coords[torch.logical_not(cloud_mask)] = 0.
-    # hard-calculate oxygen position of carbonyl group with parallel version of NERF
-    if place_oxygen: 
-        # build (=O) position of revery aa in each chain
-        for s in range(batch):
-            # dihedrals phi=f(c-1, n, ca, c) & psi=f(n, ca, c, n+1)
-            # phi = get_dihedral_torch(*backbone[s, i*3 - 1 : i*3 + 3]) if i>0 else None
-            psis = torch.tensor([ get_dihedral_torch(*backbones[s, i*3 + 0 : i*3 + 4] )if i < length-1 else np.pi*5/4 \
-                                  for i in range(length) ])
-            # the angle for placing oxygen is opposite to psi of current res.
-            # psi not available for last one so pi/4 taken for now
-            bond_lens  = repeat(torch.tensor(BB_BUILD_INFO["BONDLENS"]["c-o"]), ' -> b', b=length).to(psis.device)
-            bond_angs  = repeat(torch.tensor(BB_BUILD_INFO["BONDANGS"]["ca-c-o"]), ' -> b', b=length).to(psis.device)
-            correction = repeat(torch.tensor(-np.pi), ' -> b', b=length).to(psis.device) 
-            new_coords[:, :, 3] = nerf_torch(new_coords[:, :, 0], 
-                                             new_coords[:, :, 1], 
-                                             new_coords[:, :, 2], 
-                                             bond_lens, bond_angs, psis + correction)
-    else: 
-        # init oxygen to carbonyl
-        new_coords[:, :, 3] = predicted[:, :, 2]
 
-    return new_coords
-
+    # replace any nan-s with previous point location (or N if pos is 13th of AA)
+    nan_mask = list(torch.nonzero(new_coords!=new_coords, as_tuple=True))
+    new_coords[nan_mask[0], nan_mask[1], nan_mask[2]] = new_coords[nan_mask[0], 
+                                                                   nan_mask[1],
+                                                                   (nan_mask[-2]+1) % new_coords.shape[-1]] 
+    return new_coords.to(device)
 
 
 # distance utils (distogram to dist mat + masking)
@@ -687,7 +781,7 @@ def mds_torch(pre_dist_mat, weights=None, iters=10, tol=1e-5, eigen=False, verbo
     u = torch.stack([svd[0] for svd in svds], dim=0)
     s = torch.stack([svd[1] for svd in svds], dim=0)
     v = torch.stack([svd[2] for svd in svds], dim=0)
-    best_3d_coords = torch.bmm(u, torch.diag_embed(s).sqrt())[..., :3]
+    best_3d_coords = torch.bmm(u, torch.diag_embed(s).abs().sqrt())[..., :3]
 
     # only eigen - way faster but not weights
     if weights is None and eigen==True:
@@ -851,7 +945,7 @@ def calc_phis_torch(pred_coords, N_mask, CA_mask, C_mask=None,
 
     # return percentage of lower than 0
     if prop: 
-        return torch.tensor( [(x<0).float().mean().item() for x in phis] ) 
+        return torch.stack([(x<0).float().mean() for x in phis], dim=0 ) 
     return phis
 
 
@@ -953,7 +1047,8 @@ def kabsch_numpy(X, Y):
 
 # metrics - more formulas here: http://predictioncenter.org/casp12/doc/help.html
 
-def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=None, distmat_mask=None):
+def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2,
+                       custom=None, distmat_mask=None, clamp=None):
     """ Calculates a loss on the distance matrix - no need to align structs.
         Inputs: 
         * X: (N, d) tensor. the predicted structure. One of (X, X_mat) is needed.
@@ -965,20 +1060,27 @@ def distmat_loss_torch(X=None, Y=None, X_mat=None, Y_mat=None, p=2, q=2, custom=
         * custom: func or None. custom loss over distance matrices. 
                   ex: lambda x,y: 1 - 1/ (1 + ((x-y))**2) (1 is very bad. 0 is good)
         * distmat_mask: (N, N) mask (boolean or weights for each ij pos). optional.
+        * clamp: tuple of (min,max) values for clipping distance matrices. ex: (0,150)
     """
     assert (X is not None or X_mat is not None) and \
            (Y is not None or Y_mat is not None), "The true and predicted coords or dist mats must be provided"
     # calculate distance matrices
     if X_mat is None: 
+        X = X.squeeze()
+        if clamp is not None:
+            X = torch.clamp(X, *clamp)
         X_mat = torch.cdist(X, X, p=p)
     if Y_mat is None: 
+        Y = Y.squeeze()
+        if clamp is not None:
+            Y = torch.clamp(Y, *clamp)
         Y_mat = torch.cdist(Y, Y, p=p)
     if distmat_mask is None:
         distmat_mask = torch.ones_like(Y_mat).bool()
 
     # do custom expression if passed
     if custom is not None:
-        loss = custom(X_mat, Y_mat).mean()
+        return custom(X_mat.squeeze(), Y_mat.squeeze()).mean()
     # **2 ensures always positive. Later scale back to desired power
     else:
         loss = ( X_mat - Y_mat )**2 
@@ -1033,8 +1135,8 @@ def gdt_numpy(X, Y, cutoffs, weights=None):
 
 def tmscore_torch(X, Y):
     """ Assumes x,y are both (B x D x N). see below for wrapper. """
-    L = X.shape[-1]
-    d0 = 1.24 * np.cbrt(L - 15) - 1.8
+    L = max(15, X.shape[-1])
+    d0 = 1.24 * (L - 15)**(1/3) - 1.8
     # get distance
     dist = ((X - Y)**2).sum(dim=1).sqrt()
     # formula (see wrapper for source): 
@@ -1042,7 +1144,7 @@ def tmscore_torch(X, Y):
 
 def tmscore_numpy(X, Y):
     """ Assumes x,y are both (B x D x N). see below for wrapper. """
-    L = X.shape[-1]
+    L = max(15, X.shape[-1])
     d0 = 1.24 * np.cbrt(L - 15) - 1.8
     # get distance
     dist = np.sqrt( ((X - Y)**2).sum(axis=1) )

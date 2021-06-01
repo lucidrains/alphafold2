@@ -85,7 +85,7 @@ distogram, theta, phi, omega = model(
 
 Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests iteratively feeding the coordinates back into SE3 Transformer, weight shared, may work. I have decided to execute based on this idea, even though it is still up in the air how it actually works.
 
-You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> for the refinement, if you are in the experimental mood (paper just came out a week ago).
+You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> or <a href="https://github.com/lucidrains/egnn-pytorch">EGNN</a> for structural refinement.
 
 ```python
 import torch
@@ -97,8 +97,7 @@ model = Alphafold2(
     heads = 8,
     dim_head = 64,
     predict_coords = True,
-    use_se3_transformer = True,             # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
-    num_backbone_atoms = 3,                 # C, Ca, N coordinates
+    structure_module_type = 'se3',          # use SE3 Transformer - if set to False, will use E(n)-Transformer, Victor and Max Welling's new paper
     structure_module_dim = 4,               # se3 transformer dimension
     structure_module_depth = 1,             # depth
     structure_module_heads = 1,             # heads
@@ -118,6 +117,53 @@ coords = model(
     mask = mask,
     msa_mask = msa_mask
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
+```
+
+## Atoms
+
+The underlying assumption is that the trunk works on the residue level, and then constitutes to atomic level for the structure module, whether it be SE3 Transformers, E(n)-Transformer, or EGNN doing the refinement. This library defaults to the 3 backbone atoms (C, Ca, N), but you can configure it to include any other atom you like, including Cb and the sidechains.
+
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    predict_coords = True,
+    atoms = 'backbone-with-cbeta'
+).cuda()
+
+seq = torch.randint(0, 21, (2, 64)).cuda()
+msa = torch.randint(0, 21, (2, 5, 60)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+coords = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (2, 64 * 4, 3)  <-- 4 atoms per residue (C, Ca, N, Cb)
+```
+
+Valid choices for `atoms` include:
+
+- `backbone` - 3 backbone atoms (C, Ca, N) [default]
+- `backbone-with-cbeta` - 3 backbone atoms and C beta
+- `backbone-with-oxygen` - 3 backbone atoms and oxygen from carboxyl
+- `backbone-with-cbeta-and-oxygen` - 3 backbone atoms with C beta and oxygen
+- `all` - backbone and all other atoms from sidechain
+
+You can also pass in a tensor of shape (14,) defining which atoms you would like to include
+
+ex.
+
+```python
+atoms = torch.tensor([1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1])
 ```
 
 ## MSA, ESM, or ProtTrans Embeddings
@@ -195,8 +241,7 @@ model = Alphafold2(
     dim_head = 64,
     predict_coords = True,
     predict_real_value_distances = True,      # set this to True
-    use_se3_transformer = True,
-    num_backbone_atoms = 3,
+    structure_module_type = 'se3',
     structure_module_dim = 4,
     structure_module_depth = 1,
     structure_module_heads = 1,
@@ -215,6 +260,123 @@ coords = model(
     mask = mask,
     msa_mask = msa_mask
 ) # (2, 64 * 3, 3)  <-- 3 atoms per residue
+```
+
+## Convolutions
+
+You can add convolutional blocks, for both the primary sequence as well as the MSA, by simply setting one extra keyword argument `use_conv = True`
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True # set this to True
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+The convolutional kernels follow the lead of <a href="https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415">this paper</a>, combining 1d and 2d kernels in one resnet-like block. You can fully customize the kernels as such.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True, # set this to True
+    conv_seq_kernels = ((9, 1), (1, 9), (3, 3)), # kernels for N x N primary sequence
+    conv_msa_kernels = ((1, 9), (3, 3)), # kernels for {num MSAs} x N MSAs
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+You can also do cycle dilation with one extra keyword argument. Default dilation is `1` for all layers.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 2,
+    heads = 8,
+    dim_head = 64,
+    use_conv = True, # set this to True
+    dilations = (1, 3, 5) # cycle between dilations of 1, 3, 5
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
+```
+
+Finally, instead of following the pattern of convolutions, self-attention, cross-attention per depth repeating, you can customize any order you wish with the `custom_block_types` keyword
+
+ex. A network where you do predominately convolutions first, followed by self-attention + cross-attention blocks
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    heads = 8,
+    dim_head = 64,
+    custom_block_types = (
+        *(('conv',) * 6),
+        *(('self', 'cross') * 6)
+    )
+).cuda()
+
+seq = torch.randint(0, 21, (1, 128)).cuda()
+msa = torch.randint(0, 21, (1, 5, 120)).cuda()
+mask = torch.ones_like(seq).bool().cuda()
+msa_mask = torch.ones_like(msa).bool().cuda()
+
+distogram = model(
+    seq,
+    msa,
+    mask = mask,
+    msa_mask = msa_mask
+) # (1, 128, 128, 37)
 ```
 
 ## Sparse Attention
@@ -279,6 +441,30 @@ model = Alphafold2(
     cross_attn_linear = (True, False) * 3 # interleave linear and full attention
 ).cuda()
 ```
+
+## Kronecker Attention for Cross Attention
+
+This <a href="https://arxiv.org/abs/2007.08442">paper</a> suggests that if you have queries or contexts that have defined axials (say an image), you can reduce the amount of attention needed by averaging across those axials (height and width) and concatenating the averaged axials into one sequence. You can turn this on as a memory saving technique for the cross attention, specifically for the primary sequence.
+
+```python
+import torch
+from alphafold2_pytorch import Alphafold2
+
+model = Alphafold2(
+    dim = 256,
+    depth = 6,
+    heads = 8,
+    dim_head = 64,
+    cross_attn_kron_primary = True # make sure primary sequence undergoes the kronecker operator during cross attention
+).cuda()
+```
+
+You can also apply the same operator to the MSAs during cross attention with the `cross_attn_kron_msa` flag, if your MSAs are aligned and of the same width.
+
+Todo
+
+- [ ] offer masked mean reduction method
+- [ ] rotary embeddings
 
 ## Memory Compressed Attention
 
@@ -395,14 +581,19 @@ distogram = model(
 
 ## Equivariant Attention
 
-There are two equivariant self attention libraries that I have prepared for the purposes of replication. One is the implementation by Fabian Fuchs as detailed in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>. The other is from a recent paper from Deepmind, claiming their approach is better than using irreducible representations.
+I have prepared a reimplementation of SE3 Transformer, as explained by Fabian Fuchs in a <a href="https://fabianfuchsml.github.io/alphafold2/">speculatory blogpost</a>.
 
-- <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
-- <a href="https://github.com/lucidrains/lie-transformer-pytorch">Lie Transformer</a>
+In addition, a <a href="https://arxiv.org/abs/2102.09844">new paper</a> from Victor and Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. I have taken the main ideas from this paper and modified it to become a transformer (added attention to both features and coordinate updates).
 
-A new paper from Welling uses invariant features for E(n) equivariance, reaching SOTA and outperforming SE3 Transformer at a number of benchmarks, while being much faster. You can use this by simply setting `use_se3_transformer = False` on Alphafold2 initialization.
+All three of the equivariant networks above have been integrated and are available for use in the repository for atomic coordinate refinement by simply setting one hyperparameter `structure_module_type`.
 
-- <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
+- `se3` <a href="https://github.com/lucidrains/se3-transformer-pytorch">SE3 Transformer</a>
+
+- `egnn` <a href="https://github.com/lucidrains/En-transformer">EGNN</a>
+
+- `en` <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a>
+
+Of interest to readers, each of the three frameworks have also been validated by researchers on related problems.
 
 ## Testing
 
@@ -558,5 +749,33 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     eprint  = {2104.09864},
     archivePrefix = {arXiv},
     primaryClass = {cs.CL}
+}
+```
+
+```bibtex
+@article{Gao_2020,
+    title   = {Kronecker Attention Networks},
+    ISBN    = {9781450379984},
+    url     = {http://dx.doi.org/10.1145/3394486.3403065},
+    DOI     = {10.1145/3394486.3403065},
+    journal = {Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining},
+    publisher = {ACM},
+    author  = {Gao, Hongyang and Wang, Zhengyang and Ji, Shuiwang},
+    year    = {2020},
+    month   = {Jul}
+}
+```
+
+```bibtex
+@article {Si2021.05.10.443415,
+    author  = {Si, Yunda and Yan, Chengfei},
+    title   = {Improved protein contact prediction using dimensional hybrid residual networks and singularity enhanced loss function},
+    elocation-id = {2021.05.10.443415},
+    year    = {2021},
+    doi     = {10.1101/2021.05.10.443415},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415},
+    eprint  = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415.full.pdf},
+    journal = {bioRxiv}
 }
 ```

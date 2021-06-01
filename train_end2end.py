@@ -81,7 +81,6 @@ model = Alphafold2(
     heads = 8,
     dim_head = 64,
     predict_coords = True,
-    num_backbone_atoms = 3,
     structure_module_dim = 8,
     structure_module_depth = 2,
     structure_module_heads = 4,
