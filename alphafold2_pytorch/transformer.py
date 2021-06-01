@@ -44,7 +44,7 @@ class Seq2SeqTransformer(nn.Module):
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor,
-                use_padding_mask: bool = False):
+                use_padding_mask: bool = True):
         src_emb = self.positional_encoding(self.src_tok_emb(src))
         tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg))
         if use_padding_mask:

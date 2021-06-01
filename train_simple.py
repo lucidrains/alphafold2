@@ -23,29 +23,37 @@ NUM_EPOCHS = int(3e5)
 NUM_BATCHES = int(1e5)
 GRADIENT_ACCUMULATE_EVERY = 16
 LEARNING_RATE = 1e-6
-IGNORE_INDEX = 21
-THRESHOLD_LENGTH = 50
+IGNORE_INDEX = 20
+THRESHOLD_LENGTH = 100
 BATCH_SIZE = 100
 
 # transformer constants
 
-SRC_VOCAB_SIZE = 22  # number of amino acids + padding 21
+SRC_VOCAB_SIZE = 21  # number of amino acids + padding 20
 TGT_VOCAB_SIZE = 3  # backbone torsion angle
-NUM_ENCODER_LAYERS = 3
-NUM_DECODER_LAYERS = 3
-EMB_SIZE = 256
-NUM_HEAD = 4
-FFN_HID_DIM = 128
+NUM_ENCODER_LAYERS = 6
+NUM_DECODER_LAYERS = 6
+EMB_SIZE = 512
+NUM_HEAD = 8
+FFN_HID_DIM = 1024
 LOSS_WITHOUT_PADDING = False
+warmup_steps = 4000
+DROPOUT = 0.1
 
+MODEL_NAME = f"model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}_dropout{DROPOUT}_warmup{warmup_steps}"
 MODEL_PATH = f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}.pt"
 BEST_MODEL_PATH = f"model/model_t{THRESHOLD_LENGTH}_b{BATCH_SIZE}_e{NUM_ENCODER_LAYERS}_d{NUM_DECODER_LAYERS}_em{EMB_SIZE}_h{NUM_HEAD}_fh{FFN_HID_DIM}_best.pt"
 # set device
+try:
+    os.makedirs(f'graph/{MODEL_NAME}/')
+except:
+    print(f'graph/{MODEL_NAME}/ aleardy exist')
+
 
 DISTOGRAM_BUCKETS = constants.DISTOGRAM_BUCKETS
 DEVICE = constants.DEVICE
 
-graph_interval = 1
+graph_interval = 5
 # helpers
 
 
@@ -118,20 +126,20 @@ def train_epoch(model, train_iter, optimizer_, epoch):
     logits_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
     angs_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
     for idx, (batch) in enumerate(train_iter):
-        seq, coords, angs, mask = batch.seqs, batch.crds, batch.angs, batch.msks
+        seq, coords, angs, mask = batch.int_seqs, batch.crds, batch.angs, batch.msks
 
-        b, l, _ = seq.shape
+        b, l = seq.shape
 
         # prepare mask, labels
 
-        seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
+        seq, coords, angs, mask = seq.to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
             DEVICE).bool()
-        seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
+        # seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
-        if not LOSS_WITHOUT_PADDING:
-            angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
+        # if not LOSS_WITHOUT_PADDING:
+        #     angs = F.pad(angs, (0, 0, 0, THRESHOLD_LENGTH - l), value=0)
         # angs = rearrange(angs, 'b l c -> b (l c)', l=THRESHOLD_LENGTH)
-        mask = F.pad(mask, (0, THRESHOLD_LENGTH - l), value=False)
+        # mask = F.pad(mask, (0, THRESHOLD_LENGTH - l), value=False)
 
         # discretized_distances = get_bucketed_distance_matrix(coords[:, :, 1], mask, DISTOGRAM_BUCKETS, IGNORE_INDEX)
         src_padding_mask, tgt_padding_mask = create_mask(seq, seq)
@@ -161,9 +169,12 @@ def train_epoch(model, train_iter, optimizer_, epoch):
         else:
             loss_ = loss_fn(torch.masked_select(logits, mask1), torch.masked_select(angs1, mask1))
             diff = logits3 - angs3
+        diff = F.pad(diff, (0, 0, 0, (THRESHOLD_LENGTH - l)*BATCH_SIZE), value=0)
         radian_diff = torch.rad2deg(diff).reshape(-1)
         radian_diffs += abs(radian_diff)
+        logits3 = F.pad(logits3, (0, 0, 0, (THRESHOLD_LENGTH - l) * BATCH_SIZE), value=0)
         logits_avg += abs(torch.rad2deg(logits3)).reshape(-1)
+        angs3 = F.pad(angs3, (0, 0, 0, (THRESHOLD_LENGTH - l) * BATCH_SIZE), value=0)
         angs_avg += abs(torch.rad2deg(angs3)).reshape(-1)
 
         # plt.plot(logits3.tolist(), label='logits')
@@ -174,19 +185,19 @@ def train_epoch(model, train_iter, optimizer_, epoch):
             plt.plot(logits3[:, 0:1].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='phi_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/train1_{epoch}_phi.png")
+            plt.savefig(f"graph/{MODEL_NAME}/train1_{epoch}_phi.png")
             plt.clf()
             plt.plot(angs3[:, 1:2].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='psi')
             plt.plot(logits3[:, 1:2].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='psi_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/train1_{epoch}_psi.png")
+            plt.savefig(f"graph/{MODEL_NAME}/train1_{epoch}_psi.png")
             plt.clf()
             plt.plot(angs3[:, 2:3].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='omega')
             plt.plot(logits3[:, 2:3].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='omega_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/train1_{epoch}_omega.png")
+            plt.savefig(f"graph/{MODEL_NAME}/train1_{epoch}_omega.png")
         # plt.plot(diff.tolist())
 
         loss_.backward()
@@ -206,27 +217,27 @@ def train_epoch(model, train_iter, optimizer_, epoch):
         plt.plot(torch.mean(angs_avg.reshape(THRESHOLD_LENGTH * TGT_VOCAB_SIZE, -1), 1).tolist(), label='ang')
         plt.ylabel('angles')
         plt.legend()
-        plt.savefig(f"graph/train_{epoch}.png")
+        plt.savefig(f"graph/{MODEL_NAME}/train_{epoch}.png")
     return losses / len(train_iter)
 
 
-def evaluate(model, val_iter):
+def evaluate(model, val_iter, split_):
     model.eval()
     losses = 0
     radian_diffs = None  # torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * BATCH_SIZE).to(DEVICE)
     logits_avg = None
     angs_avg = None
     for idx, (batch) in (enumerate(val_iter)):
-        seq, coords, angs, mask = batch.seqs, batch.crds, batch.angs, batch.msks
+        seq, coords, angs, mask = batch.int_seqs, batch.crds, batch.angs, batch.msks
 
-        b, l, _ = seq.shape
+        b, l = seq.shape
         if radian_diffs is None:
             radian_diffs = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * b).to(DEVICE)
             logits_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * b).to(DEVICE)
             angs_avg = torch.zeros(THRESHOLD_LENGTH * TGT_VOCAB_SIZE * b).to(DEVICE)
         # prepare mask, labels
 
-        seq, coords, angs, mask = seq.argmax(dim=-1).to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
+        seq, coords, angs, mask = seq.to(DEVICE), coords.to(DEVICE), angs.to(DEVICE), mask.to(
             DEVICE).bool()
         seq = F.pad(seq, (0, THRESHOLD_LENGTH - l), value=IGNORE_INDEX)
         coords = rearrange(coords, 'b (l c) d -> b l c d', l=l)
@@ -266,26 +277,26 @@ def evaluate(model, val_iter):
         logits_avg += abs(torch.rad2deg(logits3)).reshape(-1)
         angs_avg += abs(torch.rad2deg(angs3)).reshape(-1)
 
-        if idx == 0 and epoch % graph_interval == 0:
+        if epoch % graph_interval == 0:
             offset = torch.randint(0, b, (1,)) * THRESHOLD_LENGTH
             plt.clf()
             plt.plot(angs3[:, 0:1].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='phi')
             plt.plot(logits3[:, 0:1].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='phi_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/valid1_{epoch}_phi.png")
+            plt.savefig(f"graph/{MODEL_NAME}/valid1_{epoch}_phi_{split_}_{idx}.png")
             plt.clf()
             plt.plot(angs3[:, 1:2].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='psi')
             plt.plot(logits3[:, 1:2].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='psi_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/valid1_{epoch}_psi.png")
+            plt.savefig(f"graph/{MODEL_NAME}/valid1_{epoch}_psi_{split_}_{idx}.png")
             plt.clf()
             plt.plot(angs3[:, 2:3].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='omega')
             plt.plot(logits3[:, 2:3].reshape(-1)[offset:offset+THRESHOLD_LENGTH].tolist(), label='omega_logit')
             plt.ylabel('angles')
             plt.legend()
-            plt.savefig(f"graph/valid1_{epoch}_omega.png")
+            plt.savefig(f"graph/{MODEL_NAME}/valid1_{epoch}_omega_{split_}_{idx}.png")
 
         losses += loss_.item()
     radian_diffs = radian_diffs / len(val_iter)
@@ -298,7 +309,7 @@ def evaluate(model, val_iter):
         plt.plot(torch.mean(angs_avg.reshape(THRESHOLD_LENGTH * TGT_VOCAB_SIZE, -1), 1).tolist(), label='ang')
         plt.ylabel('angles')
         plt.legend()
-        plt.savefig(f"graph/valid_{epoch}.png")
+        plt.savefig(f"graph/{MODEL_NAME}/valid_{epoch}.png")
     return losses / len(val_iter)
 
 
@@ -312,10 +323,10 @@ raw_data = scn.load(
 )
 
 filtered_raw_data = filter_dictionary_by_seq_length(raw_data, THRESHOLD_LENGTH, "train")
-writer_train = SummaryWriter("runs/train")
+writer_train = SummaryWriter(f"runs/{MODEL_NAME}/train")
 # writer_train_eval = SummaryWriter("runs/train_eval")
-writer_valid = SummaryWriter("runs/validation")
-writer_best = SummaryWriter("runs/best")
+writer_valid = SummaryWriter(f"runs/{MODEL_NAME}/validation")
+writer_best = SummaryWriter(f"runs/{MODEL_NAME}/best")
 # writer_valids = []
 for split in scn.utils.download.VALID_SPLITS:
     filtered_raw_data = filter_dictionary_by_seq_length(filtered_raw_data, THRESHOLD_LENGTH, f'{split}')
@@ -344,7 +355,8 @@ dl = iter(data['train'])
 #
 transformer = Seq2SeqTransformer(num_encoder_layers=NUM_ENCODER_LAYERS, num_decoder_layers=NUM_DECODER_LAYERS,
                                  emb_size=EMB_SIZE, src_vocab_size=SRC_VOCAB_SIZE, tgt_vocab_size=TGT_VOCAB_SIZE,
-                                 dim_feedforward=FFN_HID_DIM, num_head=NUM_HEAD, activation='gelu', max_len=5000)
+                                 dim_feedforward=FFN_HID_DIM, num_head=NUM_HEAD, activation='gelu', max_len=5000,
+                                 dropout=DROPOUT)
 
 # optimizer
 
@@ -397,11 +409,11 @@ if valid_restore < best_valid:
     best_valid = valid_restore
 # training loop
 not_improved_count = 1
-restore_epoch = 11
-warmup_steps = 4000
+restore_epoch = 101
 for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
     if epoch > warmup_steps and not_improved_count % restore_epoch == 0:
         not_improved_count = 1
+        restore_model(BEST_MODEL_PATH, transformer, optimizer)
     learning_rate = pow(EMB_SIZE, -0.5)*min(pow(epoch, -0.5), epoch*pow(warmup_steps, -1.5))
     for g in optimizer.param_groups:
         g['lr'] = learning_rate
@@ -412,7 +424,7 @@ for epoch in range(prev_epoch + 1, NUM_EPOCHS + 1):
     valid_count = 0
     val_loss_sum = 0
     for split in scn.utils.download.VALID_SPLITS:
-        val_loss = evaluate(transformer, iter(data[f'{split}']))
+        val_loss = evaluate(transformer, iter(data[f'{split}']), split)
         # writer_valids[valid_count].add_scalar("loss", val_loss, epoch)
         # writer_valids[valid_count].flush()
         # print(f"Epoch: {epoch}, {split} loss: {val_loss:.3f}")
