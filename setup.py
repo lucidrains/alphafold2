@@ -18,6 +18,7 @@ setup(
     'einops>=0.3',
     'egnn-pytorch>=0.1.10',
     'En-transformer>=0.2.3',
+    'graph-transformer-pytorch',
     'mdtraj>=1.8',
     'numpy',
     'performer-pytorch>=1.0.11',
