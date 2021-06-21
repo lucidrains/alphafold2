@@ -24,6 +24,8 @@ from egnn_pytorch import EGNN_Network
 
 from performer_pytorch import FastAttention, ProjectionUpdater
 
+from graph_transformer_pytorch import GraphTransformer
+
 # constants
 
 Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
@@ -806,6 +808,58 @@ class CoordModuleMDS(nn.Module):
 
         return coords
 
+class CoordModuleGraphTransformer(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        depth,
+        num_atoms,
+        dim_head = 64,
+        heads = 8,
+    ):
+        super().__init__()
+        self.num_atoms = num_atoms
+        self.atom_emb = nn.Embedding(num_atoms, dim)
+
+        self.transformer = GraphTransformer(
+            dim = dim,
+            dim_head = dim_head,
+            depth = depth,
+            heads = heads
+        )
+
+        self.project_to_r3 = nn.Linear(dim, 3)
+
+    def forward(
+        self,
+        *,
+        seq,
+        distance_pred,
+        trunk_embeds,
+        N_mask,
+        CA_mask,
+        C_mask,
+        cloud_mask,
+        bb_flat_mask_crossed,
+        atom_mask
+    ):
+        b, n, *_, device = *seq.shape, seq.device
+
+        mask = N_mask | CA_mask | C_mask
+        atom_ids = torch.arange(self.num_atoms, device = device)
+        atom_ids = repeat(atom_ids, 'a -> b (n a)', b = b, n = n)
+
+        nodes = self.atom_emb(atom_ids)
+        edges = distance_pred
+
+        nodes, _ = self.transformer(nodes, edges)
+        coords = self.project_to_r3(nodes)
+
+        coords = sidechain_container(seq, coords, atom_mask = atom_mask, cloud_mask = cloud_mask)
+        coords = rearrange(coords, 'b n l d -> b (n l) d')
+        return coords
+
 # main class
 
 class SequentialSequence(nn.Module):
@@ -922,6 +976,9 @@ class Alphafold2(nn.Module):
         structure_num_global_nodes = 0,
         mds_iters = 5,                          # mds coupling related parameters
         use_eigen_mds = False,
+        graph_transformer_depth = 2,
+        graph_transformer_heads = 8,
+        graph_transformer_dim_head = 64,
         coords_module = None,                   # custom coords generation module
         custom_block_types = None,
         num_custom_blocks = 1
@@ -1127,8 +1184,31 @@ class Alphafold2(nn.Module):
         trunk_upsample_factor = self.num_atoms
         needs_upsample = trunk_upsample_factor > 1
 
+        # coords modules
+
+        self.trunk_to_coords = coords_module
         self.predict_real_value_distances = predict_real_value_distances
         dim_distance_pred = constants.DISTOGRAM_BUCKETS if not predict_real_value_distances else 2   # 2 for predicting mean and standard deviation values of real-value distance
+
+        if not exists(self.trunk_to_coords):
+            self.trunk_to_coords = CoordModuleGraphTransformer(
+                dim = dim,
+                num_atoms = trunk_upsample_factor,
+                depth = graph_transformer_depth,
+                heads = graph_transformer_heads,
+                dim_head = graph_transformer_dim_head
+            )
+
+            dim_distance_pred = dim
+
+        elif self.trunk_to_coords == 'mds':
+            self.trunk_to_coords = CoordModuleMDS(
+                mds_iters,
+                use_eigen_mds,
+                predict_real_value_distances,
+            )
+
+        # calculate distogram logits
 
         self.to_distogram_logits = nn.Sequential(
             nn.LayerNorm(dim),
@@ -1140,17 +1220,6 @@ class Alphafold2(nn.Module):
             ) if needs_upsample else nn.Identity(),
             nn.Linear(dim, dim_distance_pred)
         )
-
-        # coords modules
-
-        self.trunk_to_coords = coords_module
-
-        if not exists(self.trunk_to_coords):
-            self.trunk_to_coords = CoordModuleMDS(
-                mds_iters,
-                use_eigen_mds,
-                predict_real_value_distances,
-            )
 
         # global node tokens for se3 structure module
 

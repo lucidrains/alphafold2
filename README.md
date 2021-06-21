@@ -87,6 +87,8 @@ Fabian's <a href="https://arxiv.org/abs/2102.13419">recent paper</a> suggests it
 
 You can also use <a href="https://github.com/lucidrains/En-transformer">E(n)-Transformer</a> or <a href="https://github.com/lucidrains/egnn-pytorch">EGNN</a> for structural refinement.
 
+Update: Baker's lab have shown that an end-to-end architecture from sequence and MSA embeddings to SE3 Transformers can best trRosetta and close the gap to Alphafold2. We will be using the <a href="https://github.com/lucidrains/graph-transformer-pytorch">Graph Transformer</a>, which acts on the trunk embeddings, to generate the initial set of coordinates to be sent to the equivariant network. (This is further corroborated by Costa et al in their work teasing out 3d coordinates from MSA Transformer embeddings in a paper predating Baker lab's)
+
 ```python
 import torch
 from alphafold2_pytorch import Alphafold2
@@ -776,6 +778,32 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
     publisher = {Cold Spring Harbor Laboratory},
     URL     = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415},
     eprint  = {https://www.biorxiv.org/content/early/2021/05/11/2021.05.10.443415.full.pdf},
+    journal = {bioRxiv}
+}
+```
+
+```bibtex
+@article {Costa2021.06.02.446809,
+    author  = {Costa, Allan and Ponnapati, Manvitha and Jacobson, Joseph M. and Chatterjee, Pranam},
+    title   = {Distillation of MSA Embeddings to Folded Protein Structures with Graph Transformers},
+    year    = {2021},
+    doi     = {10.1101/2021.06.02.446809},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/06/02/2021.06.02.446809},
+    eprint  = {https://www.biorxiv.org/content/early/2021/06/02/2021.06.02.446809.full.pdf},
+    journal = {bioRxiv}
+}
+```
+
+```bibtex
+@article {Baek2021.06.14.448402,
+    author  = {Baek, Minkyung and DiMaio, Frank and Anishchenko, Ivan and Dauparas, Justas and Ovchinnikov, Sergey and Lee, Gyu Rie and Wang, Jue and Cong, Qian and Kinch, Lisa N. and Schaeffer, R. Dustin and Mill{\'a}n, Claudia and Park, Hahnbeom and Adams, Carson and Glassman, Caleb R. and DeGiovanni, Andy and Pereira, Jose H. and Rodrigues, Andria V. and van Dijk, Alberdina A. and Ebrecht, Ana C. and Opperman, Diederik J. and Sagmeister, Theo and Buhlheller, Christoph and Pavkov-Keller, Tea and Rathinaswamy, Manoj K and Dalwadi, Udit and Yip, Calvin K and Burke, John E and Garcia, K. Christopher and Grishin, Nick V. and Adams, Paul D. and Read, Randy J. and Baker, David},
+    title   = {Accurate prediction of protein structures and interactions using a 3-track network},
+    year    = {2021},
+    doi     = {10.1101/2021.06.14.448402},
+    publisher = {Cold Spring Harbor Laboratory},
+    URL     = {https://www.biorxiv.org/content/early/2021/06/15/2021.06.14.448402},
+    eprint  = {https://www.biorxiv.org/content/early/2021/06/15/2021.06.14.448402.full.pdf},
     journal = {bioRxiv}
 }
 ```

@@ -339,6 +339,38 @@ def test_coords_all_atoms():
 
     assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
 
+def test_mds():
+    model = Alphafold2(
+        dim = 32,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        atoms = 'all',
+        predict_coords = True,
+        coords_module = 'mds',
+        refine_coords = True,
+        structure_module_dim = 1,
+        structure_module_depth = 1,
+        structure_module_heads = 1,
+        structure_module_dim_head = 1,
+        structure_module_knn = 2
+    )
+
+    seq = torch.randint(0, 21, (2, 8))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 16))
+    msa_mask = torch.ones_like(msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask
+    )
+
+    assert coords.shape == (2, 8 * 14, 3), 'must output coordinates'
+
 def test_custom_coords_module():
 
     class CustomCoords(nn.Module):
