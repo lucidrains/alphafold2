@@ -826,7 +826,8 @@ class CoordModuleGraphTransformer(nn.Module):
             dim = dim,
             dim_head = dim_head,
             depth = depth,
-            heads = heads
+            heads = heads,
+            with_feedforwards = True
         )
 
         self.project_to_r3 = nn.Linear(dim, 3)
