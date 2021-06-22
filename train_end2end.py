@@ -3,6 +3,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from einops import rearrange
+import torch.nn as nn
 
 # data
 
