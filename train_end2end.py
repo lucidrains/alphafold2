@@ -7,7 +7,7 @@ from einops import rearrange
 # data
 
 import sidechainnet as scn
-from sidechainnet.sequence.utils import VOCAB
+from sidechainnet.utils.sequence import VOCAB
 from sidechainnet.structure.build_info import NUM_COORDS_PER_RES
 
 # models
