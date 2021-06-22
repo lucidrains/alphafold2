@@ -80,8 +80,8 @@ for _ in range(NUM_BATCHES):
         distogram = model(seq, mask = mask)
         distogram = rearrange(distogram, 'b i j c -> b c i j')
 
-        print('distogram:',distogram.shape)
-        print('discretized_distance shape:',discretized_distances.shape)
+        # print('distogram:',distogram.shape)
+        # print('discretized_distance shape:',discretized_distances.shape)
 
         # loss
 
