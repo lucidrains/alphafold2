@@ -21,6 +21,7 @@ setup(
     'mdtraj>=1.8',
     'numpy',
     'proDy',
+    'pytorch3d',
     'requests',
     'sidechainnet',
     'torch>=1.6',
