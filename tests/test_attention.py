@@ -70,8 +70,7 @@ def test_templates_en():
         dim = 32,
         depth = 2,
         heads = 2,
-        dim_head = 32,
-        template_embedder_type = 'en'
+        dim_head = 32
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -126,7 +125,7 @@ def test_embeddings():
     )
     assert True
 
-def test_coords_se3():
+def test_coords():
     model = Alphafold2(
         dim = 32,
         depth = 2,
@@ -137,7 +136,6 @@ def test_coords_se3():
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 2
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -161,13 +159,11 @@ def test_coords_backbone_with_cbeta():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        atoms = 'backbone-with-cbeta',
         predict_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 2
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -191,13 +187,11 @@ def test_coords_all_atoms():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        atoms = 'all',
         predict_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 2
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -221,43 +215,11 @@ def test_mds():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        atoms = 'all',
         predict_coords = True,
         structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 2
-    )
-
-    seq = torch.randint(0, 21, (2, 16))
-    mask = torch.ones_like(seq).bool()
-
-    msa = torch.randint(0, 21, (2, 5, 16))
-    msa_mask = torch.ones_like(msa).bool()
-
-    coords = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-
-    assert coords.shape == (2, 16, 3), 'must output coordinates'
-
-def test_coords_se3_with_global_nodes():
-    model = Alphafold2(
-        dim = 32,
-        depth = 2,
-        heads = 2,
-        dim_head = 32,
-        predict_coords = True,
-        structure_module_dim = 1,
-        structure_module_depth = 1,
-        structure_module_heads = 1,
-        structure_module_dim_head = 1,
-        structure_module_knn = 2,
-        structure_num_global_nodes = 2
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -281,7 +243,6 @@ def test_edges_to_equivariant_network():
         depth = 1,
         heads = 2,
         dim_head = 32,
-        structure_module_type = "en",
         predict_coords = True,
         predict_angles = True
     )
@@ -301,7 +262,7 @@ def test_edges_to_equivariant_network():
     )
     assert True, 'should run without errors'
 
-def test_coords_se3_backwards():
+def test_coords_backwards():
     model = Alphafold2(
         dim = 256,
         depth = 2,
@@ -312,7 +273,6 @@ def test_coords_se3_backwards():
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
-        structure_module_knn = 1
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -331,97 +291,12 @@ def test_coords_se3_backwards():
     coords.sum().backward()
     assert True, 'must be able to go backwards through MDS and center distogram'
 
-def test_coords_En():
-    model = Alphafold2(
-        dim = 256,
-        depth = 2,
-        heads = 2,
-        dim_head = 32,
-        structure_module_type = "en",
-        predict_coords = True
-    )
-
-    seq = torch.randint(0, 21, (2, 16))
-    mask = torch.ones_like(seq).bool()
-
-    msa = torch.randint(0, 21, (2, 5, 16))
-    msa_mask = torch.ones_like(msa).bool()
-
-    coords = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-    # get masks : cloud is all points in prot. chain is all for which we have labels
-    cloud_mask = scn_cloud_mask(seq, boolean = True)
-    flat_cloud_mask = rearrange(cloud_mask, 'b l c -> b (l c)')
-    chain_mask = (mask.unsqueeze(-1) * cloud_mask)
-    flat_chain_mask = rearrange(chain_mask, 'b l c -> b (l c)')
-
-    assert True
-
-
-def test_coords_En_backwards():
-    model = Alphafold2(
-        dim = 256,
-        depth = 2,
-        heads = 2,
-        dim_head = 32,
-        structure_module_type = "en",
-        predict_coords = True
-    )
-
-    seq = torch.randint(0, 21, (2, 16))
-    mask = torch.ones_like(seq).bool()
-
-    msa = torch.randint(0, 21, (2, 5, 16))
-    msa_mask = torch.ones_like(msa).bool()
-
-    coords = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-
-    coords.sum().backward()
-    assert True, 'must be able to go backwards through MDS and center distogram'
-
-def test_coords_egnn_backwards():
-    model = Alphafold2(
-        dim = 256,
-        depth = 2,
-        heads = 2,
-        dim_head = 32,
-        structure_module_type = "egnn",
-        predict_coords = True
-    )
-
-    seq = torch.randint(0, 21, (2, 16))
-    mask = torch.ones_like(seq).bool()
-
-    msa = torch.randint(0, 21, (2, 5, 16))
-    msa_mask = torch.ones_like(msa).bool()
-
-    coords = model(
-        seq,
-        msa,
-        mask = mask,
-        msa_mask = msa_mask
-    )
-
-    coords.sum().backward()
-    assert True, 'must be able to go backwards through MDS and center distogram'
-
-
-def test_confidence_En():
+def test_confidence():
     model = Alphafold2(
         dim = 256,
         depth = 1,
         heads = 2,
         dim_head = 32,
-        structure_module_type = "en",
         predict_coords = True
     )
 

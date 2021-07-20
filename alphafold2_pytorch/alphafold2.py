@@ -443,7 +443,6 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
-        attn_types = ('full',),
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
         max_num_msas = constants.MAX_NUM_MSA,
@@ -451,28 +450,16 @@ class Alphafold2(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         sparse_self_attn = False,
-        msa_tie_row_attn = False,
         template_attn_depth = 2,
-        atoms = 'backbone-only',               # number of atoms to reconstitute each residue to, defaults to 3 for C, C-alpha, N
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
-        trunk_embeds_to_se3_edges = 0,         # feeds pairwise projected logits from the trunk embeddings into the equivariant transformer as edges
         return_aux_logits = False,
-        template_embedder_type = 'en',         # use E(n) Transformer for embedding templates
-        structure_module_type = 'se3',         # uses SE3 Transformer - but if set to false, will use the new E(n)-Transformer
         structure_module_dim = 4,
-        structure_module_depth = 1,
+        structure_module_depth = 4,
         structure_module_heads = 1,
         structure_module_dim_head = 4,
-        structure_module_refinement_iters = 8,
-        structure_module_knn = 2,
-        structure_module_adj_neighbors = 2,
-        structure_module_adj_dim = 4,
-        disable_token_embed = False,
-        disable_cross_attn_rotary = False,
-        structure_num_global_nodes = 0,
-        num_custom_blocks = 1
+        disable_token_embed = False
     ):
         super().__init__()
         self.dim = dim
@@ -485,10 +472,6 @@ class Alphafold2(nn.Module):
         # positional embedding
 
         self.self_attn_rotary_emb = FixedPositionalEmbedding(dim_head)
-
-        self.disable_cross_attn_rotary = disable_cross_attn_rotary
-        self.cross_attn_seq_rotary_emb = AxialRotaryEmbedding(dim_head)
-        self.cross_attn_msa_rotary_emb = FixedPositionalEmbedding((dim_head // 4) * 2)
 
         # template embedding
 
@@ -510,8 +493,6 @@ class Alphafold2(nn.Module):
         self.return_aux_logits = return_aux_logits
 
         # template sidechain encoding - only if needed
-
-        self.template_embedder_type = template_embedder_type
 
         self.template_sidechain_emb = EnTransformer(
             dim = dim,
@@ -551,7 +532,6 @@ class Alphafold2(nn.Module):
         # to coordinate output
 
         self.predict_coords = predict_coords
-        self.structure_module_refinement_iters = structure_module_refinement_iters
 
         self.msa_to_single_repr_dim = nn.Linear(dim, structure_module_dim)
         self.trunk_to_pairwise_repr_dim = nn.Linear(dim, structure_module_dim)
