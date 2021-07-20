@@ -419,9 +419,7 @@ class Evoformer(nn.Module):
         mask = None,
         msa_mask = None,
         seq_pos_emb = None,
-        msa_pos_emb = None,
-        seq_to_msa_pos_emb = None,
-        msa_to_seq_pos_emb = None        
+        msa_pos_emb = None
     ):
         for attn, ff, msa_attn, msa_ff in self.layers:
             # msa attention and transition
