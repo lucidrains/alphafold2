@@ -3,6 +3,7 @@ import os
 import re
 import numpy as np
 import torch
+import contextlib
 from functools import wraps
 from einops import rearrange, repeat
 # import torch_sparse # only needed for sparse nth_deg adj calculation
@@ -95,6 +96,12 @@ def invoke_torch_or_numpy(torch_fn, numpy_fn):
         return inner
     return outer
 
+@contextlib.contextmanager
+def torch_default_dtype(dtype):
+    prev_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    yield
+    torch.set_default_dtype(prev_dtype)
 
 # preprocess data
 
