@@ -65,7 +65,7 @@ def test_anglegrams():
     )
     assert True
 
-def test_templates_en():
+def test_templates():
     model = Alphafold2(
         dim = 32,
         depth = 2,
@@ -90,6 +90,35 @@ def test_templates_en():
         msa_mask = msa_mask,
         templates_feats = templates_feats,
         templates_mask = templates_mask
+    )
+    assert True
+
+def test_extra_msa():
+    model = Alphafold2(
+        dim = 128,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        predict_coords = True,
+        structure_module_dim = 4,
+    )
+
+    seq = torch.randint(0, 21, (2, 4))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 4))
+    msa_mask = torch.ones_like(msa).bool()
+
+    extra_msa = torch.randint(0, 21, (2, 5, 4))
+    extra_msa_mask = torch.ones_like(extra_msa).bool()
+
+    coords = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        extra_msa = extra_msa,
+        extra_msa_mask = extra_msa_mask
     )
     assert True
 

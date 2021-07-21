@@ -429,6 +429,7 @@ class Alphafold2(nn.Module):
         num_embedds = constants.NUM_EMBEDDS_TR,
         max_num_msas = constants.MAX_NUM_MSA,
         max_num_templates = constants.MAX_NUM_TEMPLATES,
+        extra_msa_evoformer_layers = 4,
         attn_dropout = 0.,
         ff_dropout = 0.,
         sparse_self_attn = False,
@@ -457,6 +458,18 @@ class Alphafold2(nn.Module):
 
         self.max_rel_dist = max_rel_dist
         self.pos_emb = nn.Embedding(max_rel_dist * 2 + 1, dim)
+
+        # extra msa embedding
+
+        self.extra_msa_evoformer = Evoformer(
+            dim = dim,
+            depth = extra_msa_evoformer_layers,
+            seq_len = max_seq_len,
+            heads = heads,
+            dim_head = dim_head,
+            attn_dropout = attn_dropout,
+            ff_dropout = ff_dropout
+        )
 
         # template embedding
 
@@ -637,6 +650,19 @@ class Alphafold2(nn.Module):
 
             assert t.shape[-2:] == x.shape[-2:]
             x = x + t.mean(dim = 1)
+
+        # embed extra msa, if present
+
+        if exists(extra_msa):
+            extra_m = self.token_emb(msa)
+            extra_msa_mask = default(extra_msa_mask, torch.ones_like(extra_m).bool())
+
+            x, extra_m = self.extra_msa_evoformer(
+                x,
+                extra_m,
+                mask = x_mask,
+                msa_mask = extra_msa_mask
+            )
 
         # trunk
 
