@@ -15,7 +15,6 @@ import alphafold2_pytorch.constants as constants
 
 # structure module
 
-from en_transformer import EnTransformer
 from invariant_point_attention import IPATransformer
 
 # constants
@@ -26,13 +25,6 @@ Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
 
 def exists(val):
     return val is not None
-
-def maybe(fn):
-    def inner(t, *args, **kwargs):
-        if not exists(t):
-            return None
-        return fn(t, *args, **kwargs)
-    return inner
 
 def default(val, d):
     if exists(val):
