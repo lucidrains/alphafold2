@@ -6,6 +6,8 @@ To eventually become an unofficial working Pytorch implementation of <a href="ht
 
 Once this is replicated, I intend to fold all available amino acid sequences out there in-silico and release it as an academic torrent, to further science. If you are interested in replication efforts, please drop by #alphafold at this <a href="https://discord.gg/GgDBFP8ZEt">Discord channel</a>
 
+Update: Deepmind has open sourced the official <a href="https://github.com/deepmind/alphafold">code</a> in Jax, along with the weights 🙏! This repository will now be geared towards a straight pytorch translation with some improvements on positional encoding
+
 ## Install
 
 ```bash
