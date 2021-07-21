@@ -71,7 +71,8 @@ def test_templates():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        template_dim = 32
+        templates_dim = 32,
+        templates_angles_feats_dim = 32
     )
 
     seq = torch.randint(0, 21, (2, 16))
@@ -81,6 +82,7 @@ def test_templates():
     msa_mask = torch.ones_like(msa).bool()
 
     templates_feats = torch.randn(2, 3, 16, 16, 32)
+    templates_angles = torch.randn(2, 3, 16, 32)
     templates_mask = torch.ones(2, 3, 16).bool()
 
     distogram = model(
@@ -89,6 +91,7 @@ def test_templates():
         mask = mask,
         msa_mask = msa_mask,
         templates_feats = templates_feats,
+        templates_angles = templates_angles,
         templates_mask = templates_mask
     )
     assert True

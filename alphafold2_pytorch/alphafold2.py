@@ -191,7 +191,6 @@ class AxialAttention(nn.Module):
         w_mask = h_mask = None
 
         if exists(mask):
-            mask = mask.reshape(b, h, w)
             w_mask = rearrange(mask, 'b h w -> (b w) h')
             h_mask = rearrange(mask, 'b h w -> (b h) w')
 
@@ -369,8 +368,8 @@ class MsaAttentionBlock(nn.Module):
         mask = None,
         pairwise_repr = None
     ):
-        x = self.row_attn(x) + x
-        x = self.col_attn(x, edges = pairwise_repr) + x
+        x = self.row_attn(x, mask = mask) + x
+        x = self.col_attn(x, mask = mask, edges = pairwise_repr) + x
         return x
 
 # main class
@@ -436,8 +435,9 @@ class Alphafold2(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         sparse_self_attn = False,
-        template_dim = 32,
-        template_embed_layers = 4,
+        templates_dim = 32,
+        templates_embed_layers = 4,
+        templates_angles_feats_dim = 55,
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
@@ -476,8 +476,8 @@ class Alphafold2(nn.Module):
 
         # template embedding
 
-        self.to_template_embed = nn.Linear(template_dim, dim)
-        self.template_embed_layers = template_embed_layers
+        self.to_template_embed = nn.Linear(templates_dim, dim)
+        self.templates_embed_layers = templates_embed_layers
 
         self.template_pairwise_embedder = PairwiseAttentionBlock(
             dim = dim,
@@ -491,6 +491,12 @@ class Alphafold2(nn.Module):
             dim_head = dim_head,
             heads = heads,
             dropout = attn_dropout
+        )
+
+        self.template_angle_mlp = nn.Sequential(
+            nn.Linear(templates_angles_feats_dim, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim)
         )
 
         # projection for angles, if needed
@@ -650,7 +656,7 @@ class Alphafold2(nn.Module):
             t = rearrange(t, 'b t ... -> (b t) ...')
             t_mask_crossed = rearrange(t_mask_crossed, 'b t ... -> (b t) ...')
 
-            for _ in range(self.template_embed_layers):
+            for _ in range(self.templates_embed_layers):
                 t = self.template_pairwise_embedder(t, mask = t_mask_crossed) + t
 
             t = rearrange(t, '(b t) ... -> b t ...', t = num_templates)
@@ -675,6 +681,13 @@ class Alphafold2(nn.Module):
 
             template_pooled = rearrange(template_pooled, '(b i j) () d -> b i j d', i = n, j = n)
             x = x + template_pooled
+
+        # add template angle features to MSAs by passing through MLP and then concat
+
+        if exists(templates_angles):
+            t_angle_feats = self.template_angle_mlp(templates_angles)
+            m = torch.cat((m, t_angle_feats), dim = 1)
+            msa_mask = torch.cat((msa_mask, templates_mask), dim = 1)
 
         # embed extra msa, if present
 
