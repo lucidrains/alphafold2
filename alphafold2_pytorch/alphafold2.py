@@ -187,7 +187,7 @@ class AxialAttention(nn.Module):
         self.attn_height = attn_class(dim = dim, heads = heads, **kwargs)
 
         self.edges_to_attn_bias = nn.Sequential(
-            nn.Linear(dim, heads),
+            nn.Linear(dim, heads, bias = False),
             Rearrange('b i j h -> b h i j')
         ) if accept_edges else None
 
@@ -212,6 +212,12 @@ class AxialAttention(nn.Module):
 
         h_rotary_emb, w_rotary_emb = cast_tuple(rotary_emb, 2)
 
+        # calculate attention bias
+
+        attn_bias = None
+        if exists(self.edges_to_attn_bias) and exists(edges):
+            attn_bias = self.edges_to_attn_bias(edges)
+
         # axial attention
 
         out = 0
@@ -219,19 +225,20 @@ class AxialAttention(nn.Module):
 
         if self.row_attn:
             w_x = rearrange(x, 'b h w d -> (b w) h d')
-            w_out = self.attn_width(w_x, mask = w_mask, rotary_emb = w_rotary_emb)
+            if exists(attn_bias):
+                attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = w)
+
+            w_out = self.attn_width(w_x, mask = w_mask, rotary_emb = w_rotary_emb, attn_bias = attn_bias)
             w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
             out += w_out
             axial_attn_count += 1
 
         if self.col_attn:
-            attn_bias = None
-            if exists(self.edges_to_attn_bias) and exists(edges):
-                attn_bias = self.edges_to_attn_bias(edges)
+            h_x = rearrange(x, 'b h w d -> (b h) w d')
+            if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = h)
 
-            h_x = rearrange(x, 'b h w d -> (b h) w d')
             h_out = self.attn_height(h_x, mask = h_mask, rotary_emb = h_rotary_emb, attn_bias = attn_bias)
             h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
@@ -340,8 +347,8 @@ class PairwiseAttentionBlock(nn.Module):
         super().__init__()
         self.outer_mean = OuterMean(dim)
 
-        self.triangle_attention_ingoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False)
-        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True)
+        self.triangle_attention_ingoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False, accept_edges = True)
+        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True)
         self.triangle_multiply_ingoing = TriangleMultiplicativeModule(dim = dim, mix = 'ingoing')
         self.triangle_multiply_outgoing = TriangleMultiplicativeModule(dim = dim, mix = 'outgoing')
 
@@ -355,8 +362,8 @@ class PairwiseAttentionBlock(nn.Module):
         if exists(msa_repr):
             x = x + self.outer_mean(msa_repr)
 
-        x = self.triangle_attention_ingoing(x, mask = mask) + x
-        x = self.triangle_attention_outgoing(x, mask = mask) + x
+        x = self.triangle_attention_ingoing(x, edges = x, mask = mask) + x
+        x = self.triangle_attention_outgoing(x, edges = x, mask = mask) + x
         x = self.triangle_multiply_ingoing(x, mask = mask) + x
         x = self.triangle_multiply_outgoing(x, mask = mask) + x
         return x
