@@ -100,10 +100,12 @@ class Attention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None, attn_bias = None, **kwargs):
-        device, orig_shape, h = x.device, x.shape, self.heads
+    def forward(self, x, mask = None, attn_bias = None, context = None, context_mask = None):
+        device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
-        q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
+        context = default(context, x)
+
+        q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
 
         i, j = q.shape[-2], k.shape[-2]
 
@@ -122,8 +124,9 @@ class Attention(nn.Module):
 
         if exists(mask):
             mask = default(mask, lambda: torch.ones(1, i, device = device).bool())
+            context_mask = mask if not has_context else default(context_mask, lambda: torch.ones(1, k.shape[-2], device = device).bool())
             mask_value = -torch.finfo(dots.dtype).max
-            mask = mask[:, None, :, None] * mask[:, None, None, :]
+            mask = mask[:, None, :, None] * context_mask[:, None, None, :]
             dots = dots.masked_fill(~mask, mask_value)
 
         # attention
@@ -483,6 +486,13 @@ class Alphafold2(nn.Module):
             seq_len = max_seq_len
         )
 
+        self.template_pointwise_attn = Attention(
+            dim = dim,
+            dim_head = dim_head,
+            heads = heads,
+            dropout = attn_dropout
+        )
+
         # projection for angles, if needed
 
         self.predict_angles = predict_angles
@@ -604,13 +614,13 @@ class Alphafold2(nn.Module):
             m = m + rearrange(x, 'b n d -> b () n d')
 
             # get msa_mask to all ones if none was passed
-            msa_mask = default(msa_mask, torch.ones_like(msa).bool())
+            msa_mask = default(msa_mask, lambda: torch.ones_like(msa).bool())
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
             
             # get msa_mask to all ones if none was passed
-            msa_mask = default(msa_mask, torch.ones_like(embedds[..., -1]).bool())
+            msa_mask = default(msa_mask, lambda: torch.ones_like(embedds[..., -1]).bool())
         else:
             raise Error('either MSA or embeds must be given')
 
@@ -622,7 +632,7 @@ class Alphafold2(nn.Module):
 
         # add relative positional embedding
 
-        seq_index = default(seq_index, torch.arange(n, device = device))
+        seq_index = default(seq_index, lambda: torch.arange(n, device = device))
         seq_rel_dist = rearrange(seq_index, 'i -> () i ()') - rearrange(seq_index, 'j -> () () j')
         seq_rel_dist = seq_rel_dist.clamp(-self.max_rel_dist, self.max_rel_dist) + self.max_rel_dist
         rel_pos_emb = self.pos_emb(seq_rel_dist)
@@ -635,21 +645,36 @@ class Alphafold2(nn.Module):
             # embed template
 
             t = self.to_template_embed(templates_feats)
-            templates_mask_crossed = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
+            t_mask_crossed = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
 
             t = rearrange(t, 'b t ... -> (b t) ...')
-            templates_mask_crossed = rearrange(templates_mask_crossed, 'b t ... -> (b t) ...')
+            t_mask_crossed = rearrange(t_mask_crossed, 'b t ... -> (b t) ...')
 
             for _ in range(self.template_embed_layers):
-                t = self.template_pairwise_embedder(t, mask = templates_mask_crossed) + t
+                t = self.template_pairwise_embedder(t, mask = t_mask_crossed) + t
 
             t = rearrange(t, '(b t) ... -> b t ...', t = num_templates)
-            templates_mask_crossed = rearrange(templates_mask_crossed, '(b t) ... -> b t ...', t = num_templates)
+            t_mask_crossed = rearrange(t_mask_crossed, '(b t) ... -> b t ...', t = num_templates)
 
             # template pos emb
 
-            assert t.shape[-2:] == x.shape[-2:]
-            x = x + t.mean(dim = 1)
+            x_point = rearrange(x, 'b i j d -> (b i j) () d')
+            t_point = rearrange(t, 'b t i j d -> (b i j) t d')
+            x_mask_point = rearrange(x_mask, 'b i j -> (b i j) ()')
+            t_mask_point = rearrange(t_mask_crossed, 'b t i j -> (b i j) t')
+
+            template_pooled = self.template_pointwise_attn(
+                x_point,
+                context = t_point,
+                mask = x_mask_point,
+                context_mask = t_mask_point
+            )
+
+            template_pooled_mask = rearrange(t_mask_point.sum(dim = -1) > 0, 'b -> b () ()')
+            template_pooled = template_pooled * template_pooled_mask
+
+            template_pooled = rearrange(template_pooled, '(b i j) () d -> b i j d', i = n, j = n)
+            x = x + template_pooled
 
         # embed extra msa, if present
 
