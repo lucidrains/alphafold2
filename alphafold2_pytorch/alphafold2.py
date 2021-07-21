@@ -10,9 +10,8 @@ from math import sqrt
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 
-import alphafold2_pytorch.constants as constants
 from alphafold2_pytorch.utils import *
-from alphafold2_pytorch.rotary import DepthWiseConv1d, AxialRotaryEmbedding, FixedPositionalEmbedding, apply_rotary_pos_emb
+import alphafold2_pytorch.constants as constants
 
 # structure module
 
@@ -109,7 +108,7 @@ class Attention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None, rotary_emb = None, attn_bias = None, **kwargs):
+    def forward(self, x, mask = None, attn_bias = None, **kwargs):
         device, orig_shape, h = x.device, x.shape, self.heads
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim = -1))
@@ -117,13 +116,6 @@ class Attention(nn.Module):
         i, j = q.shape[-2], k.shape[-2]
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
-
-        # rotary relative positional encoding
-
-        if exists(rotary_emb):
-            rot_q, rot_k = cast_tuple(rotary_emb, 2)
-            q = apply_rotary_pos_emb(q, rot_q)
-            k = apply_rotary_pos_emb(k, rot_k)
 
         # query / key similarities
 
@@ -194,7 +186,7 @@ class AxialAttention(nn.Module):
         self.row_attn = row_attn
         self.col_attn = col_attn
 
-    def forward(self, x, edges = None, mask = None, rotary_emb = None):
+    def forward(self, x, edges = None, mask = None):
         b, h, w, d = x.shape
 
         x = self.norm(x)
@@ -207,10 +199,6 @@ class AxialAttention(nn.Module):
             mask = mask.reshape(b, h, w)
             w_mask = rearrange(mask, 'b h w -> (b w) h')
             h_mask = rearrange(mask, 'b h w -> (b h) w')
-
-        # axial pos emb
-
-        h_rotary_emb, w_rotary_emb = cast_tuple(rotary_emb, 2)
 
         # calculate attention bias
 
@@ -228,7 +216,7 @@ class AxialAttention(nn.Module):
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = w)
 
-            w_out = self.attn_width(w_x, mask = w_mask, rotary_emb = w_rotary_emb, attn_bias = attn_bias)
+            w_out = self.attn_width(w_x, mask = w_mask, attn_bias = attn_bias)
             w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
             out += w_out
@@ -239,7 +227,7 @@ class AxialAttention(nn.Module):
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = h)
 
-            h_out = self.attn_height(h_x, mask = h_mask, rotary_emb = h_rotary_emb, attn_bias = attn_bias)
+            h_out = self.attn_height(h_x, mask = h_mask, attn_bias = attn_bias)
             h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
             out += h_out
@@ -342,7 +330,7 @@ class PairwiseAttentionBlock(nn.Module):
         seq_len,
         heads,
         dim_head,
-        dropout
+        dropout = 0.
     ):
         super().__init__()
         self.outer_mean = OuterMean(dim)
@@ -356,8 +344,7 @@ class PairwiseAttentionBlock(nn.Module):
         self,
         x,
         mask = None,
-        msa_repr = None,
-        rotary_emb = None
+        msa_repr = None
     ):
         if exists(msa_repr):
             x = x + self.outer_mean(msa_repr)
@@ -375,7 +362,7 @@ class MsaAttentionBlock(nn.Module):
         seq_len,
         heads,
         dim_head,
-        dropout
+        dropout = 0.
     ):
         super().__init__()
         self.row_attn = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False)
@@ -385,8 +372,7 @@ class MsaAttentionBlock(nn.Module):
         self,
         x,
         mask = None,
-        pairwise_repr = None,
-        rotary_emb = None
+        pairwise_repr = None
     ):
         x = self.row_attn(x) + x
         x = self.col_attn(x, edges = pairwise_repr) + x
@@ -421,22 +407,18 @@ class Evoformer(nn.Module):
         self,
         x,
         m,
-        seq_shape = None,
-        msa_shape = None,
         mask = None,
-        msa_mask = None,
-        seq_pos_emb = None,
-        msa_pos_emb = None
+        msa_mask = None
     ):
         for attn, ff, msa_attn, msa_ff in self.layers:
             # msa attention and transition
 
-            m = msa_attn(m, mask = msa_mask, pairwise_repr = x, rotary_emb = msa_pos_emb) + m
+            m = msa_attn(m, mask = msa_mask, pairwise_repr = x) + m
             m = msa_ff(m) + m
 
             # pairwise attention and transition
 
-            x = attn(x, mask = mask, rotary_emb = seq_pos_emb) + x
+            x = attn(x, mask = mask) + x
             x = ff(x) + x
 
         return x, m
@@ -450,6 +432,7 @@ class Alphafold2(nn.Module):
         depth = 6,
         heads = 8,
         dim_head = 64,
+        max_rel_dist = 32,
         num_tokens = constants.NUM_AMINO_ACIDS,
         num_embedds = constants.NUM_EMBEDDS_TR,
         max_num_msas = constants.MAX_NUM_MSA,
@@ -457,7 +440,8 @@ class Alphafold2(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         sparse_self_attn = False,
-        template_attn_depth = 2,
+        template_dim = 32,
+        template_embed_layers = 4,
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
@@ -474,16 +458,25 @@ class Alphafold2(nn.Module):
         # token embedding
 
         self.token_emb = nn.Embedding(num_tokens, dim) if not disable_token_embed else Always(0)
+        self.to_pairwise_repr = nn.Linear(dim, dim * 2)
         self.disable_token_embed = disable_token_embed
 
         # positional embedding
 
-        self.self_attn_rotary_emb = FixedPositionalEmbedding(dim_head)
+        self.max_rel_dist = max_rel_dist
+        self.pos_emb = nn.Embedding(max_rel_dist * 2 + 1, dim)
 
         # template embedding
 
-        self.template_dist_emb = nn.Embedding(constants.DISTOGRAM_BUCKETS, dim)
-        self.template_num_pos_emb = nn.Embedding(max_num_templates, dim)
+        self.to_template_embed = nn.Linear(template_dim, dim)
+        self.template_embed_layers = template_embed_layers
+
+        self.template_pairwise_embedder = PairwiseAttentionBlock(
+            dim = dim,
+            dim_head = dim_head,
+            heads = heads,
+            seq_len = max_seq_len
+        )
 
         # projection for angles, if needed
 
@@ -498,16 +491,6 @@ class Alphafold2(nn.Module):
         # when predicting the coordinates, whether to return the other logits, distogram (and optionally, angles)
 
         self.return_aux_logits = return_aux_logits
-
-        # template sidechain encoding - only if needed
-
-        self.template_sidechain_emb = EnTransformer(
-            dim = dim,
-            dim_head = dim,
-            heads = 1,
-            neighbors = 32,
-            depth = 4
-        )
 
         # custom embedding projection
 
@@ -561,17 +544,17 @@ class Alphafold2(nn.Module):
         msa = None,
         mask = None,
         msa_mask = None,
+        extra_msa = None,
+        extra_msa_mask = None,
+        seq_index = None,
         seq_embed = None,
         msa_embed = None,
-        templates_seq = None,
-        templates_dist = None,
+        templates_feats = None,
         templates_mask = None,
-        templates_coors = None,
-        templates_sidechains = None,
+        templates_angles = None,
         embedds = None,
         return_trunk = False,
-        return_confidence = False,
-        refine = True
+        return_confidence = False        
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -603,115 +586,74 @@ class Alphafold2(nn.Module):
         if exists(seq_embed):
             x += seq_embed
 
-        # outer sum
-
-        x = rearrange(x, 'b i d -> b i () d') + rearrange(x, 'b j d-> b () j d') # create pair-wise residue embeds
-        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j') if exists(mask) else None
-
         # embed multiple sequence alignment (msa)
 
-        m = None
-        msa_shape = None
         if exists(msa):
             m = self.token_emb(msa)
 
             if exists(msa_embed):
-                m += msa_embed
+                m = m + msa_embed
 
-            msa_shape = m.shape
+            # add single representation to msa representation
+
+            m = m + rearrange(x, 'b n d -> b () n d')
 
             # get msa_mask to all ones if none was passed
             msa_mask = default(msa_mask, torch.ones_like(msa).bool())
 
         elif exists(embedds):
             m = self.embedd_project(embedds)
-
-            msa_shape = m.shape
             
             # get msa_mask to all ones if none was passed
             msa_mask = default(msa_mask, torch.ones_like(embedds[..., -1]).bool())
+        else:
+            raise Error('either MSA or embeds must be given')
+
+        # derive pairwise representation
+
+        x_left, x_right = self.to_pairwise_repr(x).chunk(2, dim = -1)
+        x = rearrange(x_left, 'b i d -> b i () d') + rearrange(x_right, 'b j d-> b () j d') # create pair-wise residue embeds
+        x_mask = rearrange(mask, 'b i -> b i ()') + rearrange(mask, 'b j -> b () j') if exists(mask) else None
+
+        # add relative positional embedding
+
+        seq_index = default(seq_index, torch.arange(n, device = device))
+        seq_rel_dist = rearrange(seq_index, 'i -> () i ()') - rearrange(seq_index, 'j -> () () j')
+        seq_rel_dist = seq_rel_dist.clamp(-self.max_rel_dist, self.max_rel_dist) + self.max_rel_dist
+        rel_pos_emb = self.pos_emb(seq_rel_dist)
 
         # embed templates, if present
 
-        if exists(templates_seq):
-            assert exists(templates_coors), 'template residue coordinates must be supplied `templates_coors`'
-            _, num_templates, *_ = templates_seq.shape
-
-
-            if not exists(templates_dist):
-                templates_dist = get_bucketed_distance_matrix(templates_coors, templates_mask, constants.DISTOGRAM_BUCKETS)
+        if exists(templates_feats):
+            _, num_templates, *_ = templates_feats.shape
 
             # embed template
 
-            t_seq = self.token_emb(templates_seq)
+            t = self.to_template_embed(templates_feats)
+            templates_mask_crossed = rearrange(templates_mask, 'b t i -> b t i ()') * rearrange(templates_mask, 'b t j -> b t () j')
 
-            # if sidechain information is present
-            # color the residue embeddings with the sidechain type 1 features
-            # todo (make efficient)
+            t = rearrange(t, 'b t ... -> (b t) ...')
+            templates_mask_crossed = rearrange(templates_mask_crossed, 'b t ... -> (b t) ...')
 
-            if exists(templates_sidechains):
-                shape = t_seq.shape
-                t_seq = rearrange(t_seq, 'b t n d -> (b t) n d')
-                templates_coors = rearrange(templates_coors, 'b t n c -> (b t) n c')
-                en_mask = rearrange(templates_mask, 'b t n -> (b t) n')
+            for _ in range(self.template_embed_layers):
+                t = self.template_pairwise_embedder(t, mask = templates_mask_crossed) + t
 
-                t_seq, _ = self.template_sidechain_emb(
-                    t_seq,
-                    templates_coors,
-                    mask = en_mask
-                )
-
-                t_seq = t_seq.reshape(*shape)
-
-            # embed template distances
-
-            t_dist = self.template_dist_emb(templates_dist)
-
-            t_seq = rearrange(t_seq, 'b t i d -> b t i () d') + rearrange(t_seq, 'b t j d -> b t () j d')
-            t = t_seq + t_dist
+            t = rearrange(t, '(b t) ... -> b t ...', t = num_templates)
+            templates_mask_crossed = rearrange(templates_mask_crossed, '(b t) ... -> b t ...', t = num_templates)
 
             # template pos emb
 
-            template_num_pos_emb = self.template_num_pos_emb(torch.arange(num_templates, device = device))
-            t += rearrange(template_num_pos_emb, 't d-> () t () () d')
-
             assert t.shape[-2:] == x.shape[-2:]
             x = x + t.mean(dim = 1)
-
-        # flatten
-
-        seq_shape = x.shape
-
-        # pos emb
-
-        seq_pos_emb = self.self_attn_rotary_emb(n, device = device)
-
-        msa_pos_emb = None
-        seq_to_msa_pos_emb = None
-        msa_to_seq_pos_emb = None
-
-        if exists(msa):
-            num_msa = msa_shape[-3]
-            msa_seq_len = msa_shape[-2]
-
-            msa_pos_emb = self.self_attn_rotary_emb(msa_seq_len, device = device)
 
         # trunk
 
         x, m = self.net(
             x,
             m,
-            seq_shape,
-            msa_shape,
             mask = x_mask,
-            msa_mask = msa_mask,
-            seq_pos_emb = seq_pos_emb,
-            msa_pos_emb = (msa_pos_emb, None),
+            msa_mask = msa_mask
         )
-
-        # remove templates, if present
-
-        x = x.view(seq_shape)
 
         # calculate theta and phi before symmetrization
 
@@ -738,7 +680,7 @@ class Alphafold2(nn.Module):
 
         # derive single and pairwise embeddings for structural refinement
 
-        m = m.reshape(msa_shape).mean(dim = 1)
+        m = m.mean(dim = 1)
 
         single_repr = self.msa_to_single_repr_dim(m)
         pairwise_repr = self.trunk_to_pairwise_repr_dim(x)
