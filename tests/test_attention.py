@@ -57,7 +57,7 @@ def test_anglegrams():
     mask = torch.ones_like(seq).bool()
     msa_mask = torch.ones_like(msa).bool()
 
-    distogram, theta, phi, omega = model(
+    ret = model(
         seq,
         msa,
         mask = mask,

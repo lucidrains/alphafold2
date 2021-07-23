@@ -1,9 +1,11 @@
 import torch
+import math
 from torch import nn, einsum
 from inspect import isfunction
 from functools import partial
 from itertools import islice, cycle
 from collections import namedtuple
+from dataclasses import dataclass
 import torch.nn.functional as F
 
 from math import sqrt
@@ -19,7 +21,13 @@ from invariant_point_attention import IPATransformer
 
 # constants
 
-Logits = namedtuple('Logits', ['distance', 'theta', 'phi', 'omega'])
+@dataclass
+class ReturnValues:
+    distance: torch.Tensor = None
+    theta: torch.Tensor = None
+    phi: torch.Tensor = None
+    omega: torch.Tensor = None
+    msa_mlm_loss: torch.Tensor = None
 
 # helpers
 
@@ -393,7 +401,7 @@ class MsaAttentionBlock(nn.Module):
         x = self.col_attn(x, mask = mask, edges = pairwise_repr) + x
         return x
 
-# main class
+# main evoformer class
 
 class Evoformer(nn.Module):
     def __init__(
@@ -439,6 +447,74 @@ class Evoformer(nn.Module):
 
         return x, m
 
+# MSA MLM
+
+def get_mask_subset_with_prob(mask, prob):
+    batch, seq_len, device = *mask.shape, mask.device
+    max_masked = math.ceil(prob * seq_len)
+
+    num_tokens = mask.sum(dim=-1, keepdim=True)
+    mask_excess = (mask.cumsum(dim=-1) > (num_tokens * prob).ceil())
+    mask_excess = mask_excess[:, :max_masked]
+
+    rand = torch.rand((batch, seq_len), device=device).masked_fill(~mask, -1e9)
+    _, sampled_indices = rand.topk(max_masked, dim=-1)
+    sampled_indices = (sampled_indices + 1).masked_fill_(mask_excess, 0)
+
+    new_mask = torch.zeros((batch, seq_len + 1), device=device)
+    new_mask.scatter_(-1, sampled_indices, 1)
+    return new_mask[:, 1:].bool()
+
+class MLM(nn.Module):
+    def __init__(
+        self,
+        dim,
+        random_replace_token_prob = 0.05,
+        exclude_token_ids = (0,)
+    ):
+        super().__init__()
+        self.to_logits = nn.Linear(dim, constants.NUM_AMINO_ACIDS)
+
+        self.exclude_token_ids = exclude_token_ids
+        self.random_replace_token_prob = random_replace_token_prob
+
+    def noise(self, seq, mask):
+        num_msa = seq.shape[1]
+        seq = rearrange(seq, 'b n ... -> (b n) ...')
+        mask = rearrange(mask, 'b n ... -> (b n) ...')
+
+        # prepare masks for noising sequence
+
+        excluded_tokens_mask = mask
+
+        for token_id in self.exclude_token_ids:
+            excluded_tokens_mask = excluded_tokens_mask & (seq != token_id)
+
+        random_replace_token_prob_mask = get_mask_subset_with_prob(excluded_tokens_mask, self.random_replace_token_prob)
+
+        # generate random tokens
+
+        random_tokens = torch.randint(1, constants.NUM_AMINO_ACIDS, seq.shape)
+
+        for token_id in self.exclude_token_ids:
+            random_replace_token_prob_mask = random_replace_token_prob_mask & (random_tokens != token_id)  # make sure you never substitute a token with an excluded token type (pad, start, end)
+
+        # noise sequence
+
+        noised_seq = torch.where(random_replace_token_prob_mask, random_tokens, seq)
+        noised_seq = rearrange(noised_seq, '(b n) ... -> b n ...', n = num_msa)
+        random_replace_token_prob_mask = rearrange(random_replace_token_prob_mask, '(b n) ... -> b n ...', n = num_msa)
+
+        return noised_seq, random_replace_token_prob_mask
+
+    def forward(self, seq_embed, original_seq, mask):
+        logits = self.to_logits(seq_embed)
+        seq_logits = logits[mask]
+        seq_labels = original_seq[mask]
+
+        loss = F.cross_entropy(seq_logits, seq_labels, reduction = 'mean')
+        return loss
+
 class Alphafold2(nn.Module):
     def __init__(
         self,
@@ -468,7 +544,9 @@ class Alphafold2(nn.Module):
         structure_module_depth = 4,
         structure_module_heads = 1,
         structure_module_dim_head = 4,
-        disable_token_embed = False
+        disable_token_embed = False,
+        mlm_random_replace_token_prob = 0.05,
+        mlm_exclude_token_ids = (0,)
     ):
         super().__init__()
         self.dim = dim
@@ -556,6 +634,14 @@ class Alphafold2(nn.Module):
             ff_dropout = ff_dropout
         )
 
+        # MSA SSL MLM
+
+        self.mlm = MLM(
+            dim = dim,
+            random_replace_token_prob = mlm_random_replace_token_prob,
+            exclude_token_ids = mlm_exclude_token_ids
+        )
+
         # calculate distogram logits
 
         self.to_distogram_logits = nn.Sequential(
@@ -629,6 +715,15 @@ class Alphafold2(nn.Module):
 
         if exists(seq_embed):
             x += seq_embed
+
+        # mlm for MSAs
+
+        if self.training and exists(msa):
+            original_msa = msa
+            msa_mask = default(msa_mask, lambda: torch.ones_like(msa).bool())
+
+            noised_msa, replaced_msa_mask = self.mlm.noise(msa, msa_mask)
+            msa = noised_msa
 
         # embed multiple sequence alignment (msa)
 
@@ -734,25 +829,34 @@ class Alphafold2(nn.Module):
             msa_mask = msa_mask
         )
 
+        # ready output container
+
+        ret = ReturnValues()
+
         # calculate theta and phi before symmetrization
 
         if self.predict_angles:
-            theta_logits = self.to_prob_theta(x)
-            phi_logits = self.to_prob_phi(x)
+            ret.theta_logits = self.to_prob_theta(x)
+            ret.phi_logits = self.to_prob_phi(x)
 
         # embeds to distogram
 
         trunk_embeds = (x + rearrange(x, 'b i j d -> b j i d')) * 0.5  # symmetrize
         distance_pred = self.to_distogram_logits(trunk_embeds)
+        ret.distance = distance_pred
+
+        # calculate mlm loss, if training
+
+        msa_mlm_loss = None
+        if self.training and exists(msa):
+            num_msa = original_msa.shape[1]
+            msa_mlm_loss = self.mlm(m[:, :num_msa], original_msa, replaced_msa_mask)
 
         # determine angles, if specified
 
-        ret = distance_pred
-
         if self.predict_angles:
             omega_input = trunk_embeds if self.symmetrize_omega else x
-            omega_logits = self.to_prob_omega(omega_input)
-            ret = Logits(distance_pred, theta_logits, phi_logits, omega_logits)
+            ret.omega_logits = self.to_prob_omega(omega_input)
 
         if not self.predict_coords or return_trunk:
             return ret
