@@ -100,7 +100,7 @@ class Attention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None, attn_bias = None, context = None, context_mask = None):
+    def forward(self, x, mask = None, attn_bias = None, context = None, context_mask = None, tie_dim = None):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
 
         context = default(context, x)
@@ -111,9 +111,24 @@ class Attention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
+        # scale
+
+        q = q * self.scale
+
         # query / key similarities
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        if exists(tie_dim):
+            # as in the paper, for the extra MSAs
+            # they average the queries along the rows of the MSAs
+            # they named this particular module MSAColumnGlobalAttention
+
+            q, k = map(lambda t: rearrange(t, '(b r) ... -> b r ...', r = tie_dim), (q, k))
+            q = q.mean(dim = 1)
+
+            dots = einsum('b h i d, b r h j d -> b r h i j', q, k)
+            dots = rearrange(dots, 'b r ... -> (b r) ...')
+        else:
+            dots = einsum('b h i d, b h j d -> b h i j', q, k)
 
         # add attention bias, if supplied (for pairwise to msa attention communication)
 
@@ -161,6 +176,7 @@ class AxialAttention(nn.Module):
         row_attn = True,
         col_attn = True,
         accept_edges = False,
+        global_query_attn = False,
         **kwargs
     ):
         super().__init__()
@@ -169,9 +185,9 @@ class AxialAttention(nn.Module):
         attn_class = SparseAttention if sparse_attn else Attention
 
         self.norm = nn.LayerNorm(dim)
+        self.global_query_attn = global_query_attn
 
-        self.attn_width = attn_class(dim = dim, heads = heads, **kwargs)
-        self.attn_height = attn_class(dim = dim, heads = heads, **kwargs)
+        self.attn = attn_class(dim = dim, heads = heads, **kwargs)
 
         self.edges_to_attn_bias = nn.Sequential(
             nn.Linear(dim, heads, bias = False),
@@ -182,6 +198,8 @@ class AxialAttention(nn.Module):
         self.col_attn = col_attn
 
     def forward(self, x, edges = None, mask = None):
+        assert self.row_attn ^ self.col_attn, 'has to be either row or column attention, but not both'
+
         b, h, w, d = x.shape
 
         x = self.norm(x)
@@ -210,7 +228,8 @@ class AxialAttention(nn.Module):
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = w)
 
-            w_out = self.attn_width(w_x, mask = w_mask, attn_bias = attn_bias)
+            tie_dim = w if self.global_query_attn else None
+            w_out = self.attn(w_x, mask = w_mask, attn_bias = attn_bias, tie_dim = tie_dim)
             w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
             out += w_out
@@ -221,7 +240,8 @@ class AxialAttention(nn.Module):
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = h)
 
-            h_out = self.attn_height(h_x, mask = h_mask, attn_bias = attn_bias)
+            tie_dim = h if self.global_query_attn else None
+            h_out = self.attn(h_x, mask = h_mask, attn_bias = attn_bias, tie_dim = tie_dim)
             h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
             out += h_out
@@ -324,13 +344,14 @@ class PairwiseAttentionBlock(nn.Module):
         seq_len,
         heads,
         dim_head,
-        dropout = 0.
+        dropout = 0.,
+        global_column_attn = False
     ):
         super().__init__()
         self.outer_mean = OuterMean(dim)
 
         self.triangle_attention_ingoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False, accept_edges = True)
-        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True)
+        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True, global_query_attn = global_column_attn)
         self.triangle_multiply_ingoing = TriangleMultiplicativeModule(dim = dim, mix = 'ingoing')
         self.triangle_multiply_outgoing = TriangleMultiplicativeModule(dim = dim, mix = 'outgoing')
 
@@ -384,14 +405,15 @@ class Evoformer(nn.Module):
         heads,
         dim_head,
         attn_dropout,
-        ff_dropout
+        ff_dropout,
+        global_column_attn = False
     ):
         super().__init__()
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PairwiseAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout),
+                PairwiseAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, global_column_attn = global_column_attn),
                 FeedForward(dim = dim, dropout = ff_dropout),
                 MsaAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout),
                 FeedForward(dim = dim, dropout = ff_dropout),
@@ -471,7 +493,8 @@ class Alphafold2(nn.Module):
             heads = heads,
             dim_head = dim_head,
             attn_dropout = attn_dropout,
-            ff_dropout = ff_dropout
+            ff_dropout = ff_dropout,
+            global_column_attn = True
         )
 
         # template embedding
