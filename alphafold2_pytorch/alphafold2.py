@@ -469,13 +469,19 @@ class MLM(nn.Module):
     def __init__(
         self,
         dim,
-        random_replace_token_prob = 0.05,
+        mask_id,
+        mask_prob = 0.15,
+        random_replace_token_prob = 0.1,
+        keep_token_same_prob = 0.1,
         exclude_token_ids = (0,)
     ):
         super().__init__()
         self.to_logits = nn.Linear(dim, constants.NUM_AMINO_ACIDS)
+        self.mask_id = mask_id
 
+        self.mask_prob = mask_prob
         self.exclude_token_ids = exclude_token_ids
+        self.keep_token_same_prob = keep_token_same_prob
         self.random_replace_token_prob = random_replace_token_prob
 
     def noise(self, seq, mask):
@@ -490,9 +496,19 @@ class MLM(nn.Module):
         for token_id in self.exclude_token_ids:
             excluded_tokens_mask = excluded_tokens_mask & (seq != token_id)
 
-        random_replace_token_prob_mask = get_mask_subset_with_prob(excluded_tokens_mask, self.random_replace_token_prob)
+        mlm_mask = get_mask_subset_with_prob(excluded_tokens_mask, self.mask_prob)
+
+        # keep some tokens the same
+
+        replace_token_with_mask = get_mask_subset_with_prob(mlm_mask, 1. - self.keep_token_same_prob)
+
+        # replace with mask
+
+        seq = seq.masked_fill(mlm_mask, self.mask_id)
 
         # generate random tokens
+
+        random_replace_token_prob_mask = get_mask_subset_with_prob(mlm_mask, (1 - self.keep_token_same_prob) * self.random_replace_token_prob)
 
         random_tokens = torch.randint(1, constants.NUM_AMINO_ACIDS, seq.shape)
 
@@ -503,9 +519,9 @@ class MLM(nn.Module):
 
         noised_seq = torch.where(random_replace_token_prob_mask, random_tokens, seq)
         noised_seq = rearrange(noised_seq, '(b n) ... -> b n ...', n = num_msa)
-        random_replace_token_prob_mask = rearrange(random_replace_token_prob_mask, '(b n) ... -> b n ...', n = num_msa)
+        mlm_mask = rearrange(mlm_mask, '(b n) ... -> b n ...', n = num_msa)
 
-        return noised_seq, random_replace_token_prob_mask
+        return noised_seq, mlm_mask
 
     def forward(self, seq_embed, original_seq, mask):
         logits = self.to_logits(seq_embed)
@@ -545,15 +561,17 @@ class Alphafold2(nn.Module):
         structure_module_heads = 1,
         structure_module_dim_head = 4,
         disable_token_embed = False,
-        mlm_random_replace_token_prob = 0.05,
-        mlm_exclude_token_ids = (0,)
+        mlm_mask_prob = 0.15,
+        mlm_random_replace_token_prob = 0.1,
+        mlm_keep_token_same_prob = 0.1,
+        mlm_exclude_token_ids = (0,),
     ):
         super().__init__()
         self.dim = dim
 
         # token embedding
 
-        self.token_emb = nn.Embedding(num_tokens, dim) if not disable_token_embed else Always(0)
+        self.token_emb = nn.Embedding(num_tokens + 1, dim) if not disable_token_embed else Always(0)
         self.to_pairwise_repr = nn.Linear(dim, dim * 2)
         self.disable_token_embed = disable_token_embed
 
@@ -638,6 +656,9 @@ class Alphafold2(nn.Module):
 
         self.mlm = MLM(
             dim = dim,
+            mask_id = num_tokens, # last token of embedding is used for masking
+            mask_prob = mlm_mask_prob,
+            keep_token_same_prob = mlm_keep_token_same_prob,
             random_replace_token_prob = mlm_random_replace_token_prob,
             exclude_token_ids = mlm_exclude_token_ids
         )
