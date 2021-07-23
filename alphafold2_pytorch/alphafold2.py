@@ -333,7 +333,7 @@ class OuterMean(nn.Module):
         x = self.norm(x)
         left = self.left_proj(x)
         right = self.right_proj(x)
-        outer = rearrange(left, 'b m i d -> b m i () d') + rearrange(right, 'b m j d -> b m () j d')
+        outer = rearrange(left, 'b m i d -> b m i () d') * rearrange(right, 'b m j d -> b m () j d')
         outer = outer.mean(dim = 1)
         return self.proj_out(outer)
 
