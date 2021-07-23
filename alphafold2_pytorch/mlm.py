@@ -28,6 +28,7 @@ class MLM(nn.Module):
     def __init__(
         self,
         dim,
+        num_tokens,
         mask_id,
         mask_prob = 0.15,
         random_replace_token_prob = 0.1,
@@ -35,7 +36,7 @@ class MLM(nn.Module):
         exclude_token_ids = (0,)
     ):
         super().__init__()
-        self.to_logits = nn.Linear(dim, constants.NUM_AMINO_ACIDS)
+        self.to_logits = nn.Linear(dim, num_tokens)
         self.mask_id = mask_id
 
         self.mask_prob = mask_prob

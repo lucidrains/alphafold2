@@ -572,6 +572,7 @@ class Alphafold2(nn.Module):
 
         self.mlm = MLM(
             dim = dim,
+            num_tokens = num_tokens,
             mask_id = num_tokens, # last token of embedding is used for masking
             mask_prob = mlm_mask_prob,
             keep_token_same_prob = mlm_keep_token_same_prob,
