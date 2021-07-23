@@ -258,9 +258,9 @@ class TriangleMultiplicativeModule(nn.Module):
             nn.init.constant_(gate.weight, 0.)
             nn.init.constant_(gate.bias, 1.)
 
-        if mix == 'ingoing':
+        if mix == 'outgoing':
             self.mix_einsum_eq = '... i k d, ... j k d -> ... i j d'
-        elif mix == 'outgoing':
+        elif mix == 'ingoing':
             self.mix_einsum_eq = '... k j d, ... k i d -> ... i j d'
 
         self.to_out_norm = nn.LayerNorm(hidden_dim)
