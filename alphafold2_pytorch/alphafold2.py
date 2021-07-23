@@ -160,7 +160,7 @@ class Attention(nn.Module):
         # gating
 
         gates = self.gating(x)
-        out = out * gates            
+        out = out * gates.sigmoid()
 
         # combine to out
 
@@ -223,7 +223,7 @@ class AxialAttention(nn.Module):
         out = 0
         axial_attn_count = 0
 
-        if self.row_attn:
+        if self.col_attn:
             w_x = rearrange(x, 'b h w d -> (b w) h d')
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = w)
@@ -235,7 +235,7 @@ class AxialAttention(nn.Module):
             out += w_out
             axial_attn_count += 1
 
-        if self.col_attn:
+        if self.row_attn:
             h_x = rearrange(x, 'b h w d -> (b h) w d')
             if exists(attn_bias):
                 attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = h)
@@ -380,8 +380,8 @@ class MsaAttentionBlock(nn.Module):
         dropout = 0.
     ):
         super().__init__()
-        self.row_attn = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False)
-        self.col_attn = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True)
+        self.row_attn = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False, accept_edges = True)
+        self.col_attn = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True)
 
     def forward(
         self,
