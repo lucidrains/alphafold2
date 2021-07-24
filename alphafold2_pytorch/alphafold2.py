@@ -358,10 +358,10 @@ class PairwiseAttentionBlock(nn.Module):
         super().__init__()
         self.outer_mean = OuterMean(dim)
 
-        self.triangle_attention_ingoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False, accept_edges = True)
-        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True, global_query_attn = global_column_attn)
-        self.triangle_multiply_ingoing = TriangleMultiplicativeModule(dim = dim, mix = 'ingoing')
+        self.triangle_attention_outgoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = True, col_attn = False, accept_edges = True)
+        self.triangle_attention_ingoing = AxialAttention(dim = dim, heads = heads, dim_head = dim_head, row_attn = False, col_attn = True, accept_edges = True, global_query_attn = global_column_attn)
         self.triangle_multiply_outgoing = TriangleMultiplicativeModule(dim = dim, mix = 'outgoing')
+        self.triangle_multiply_ingoing = TriangleMultiplicativeModule(dim = dim, mix = 'ingoing')
 
     def forward(
         self,
@@ -372,10 +372,10 @@ class PairwiseAttentionBlock(nn.Module):
         if exists(msa_repr):
             x = x + self.outer_mean(msa_repr)
 
-        x = self.triangle_attention_ingoing(x, edges = x, mask = mask) + x
-        x = self.triangle_attention_outgoing(x, edges = x, mask = mask) + x
-        x = self.triangle_multiply_ingoing(x, mask = mask) + x
         x = self.triangle_multiply_outgoing(x, mask = mask) + x
+        x = self.triangle_multiply_ingoing(x, mask = mask) + x
+        x = self.triangle_attention_outgoing(x, edges = x, mask = mask) + x
+        x = self.triangle_attention_ingoing(x, edges = x, mask = mask) + x
         return x
 
 class MsaAttentionBlock(nn.Module):
@@ -397,8 +397,8 @@ class MsaAttentionBlock(nn.Module):
         mask = None,
         pairwise_repr = None
     ):
-        x = self.row_attn(x, mask = mask) + x
-        x = self.col_attn(x, mask = mask, edges = pairwise_repr) + x
+        x = self.row_attn(x, mask = mask, edges = pairwise_repr) + x
+        x = self.col_attn(x, mask = mask) + x
         return x
 
 # main evoformer class
