@@ -437,12 +437,12 @@ class Evoformer(nn.Module):
         for attn, ff, msa_attn, msa_ff in self.layers:
             # msa attention and transition
 
-            m = msa_attn(m, mask = msa_mask, pairwise_repr = x) + m
+            m = msa_attn(m, mask = msa_mask, pairwise_repr = x)
             m = msa_ff(m) + m
 
             # pairwise attention and transition
 
-            x = attn(x, mask = mask) + x
+            x = attn(x, mask = mask)
             x = ff(x) + x
 
         return x, m
