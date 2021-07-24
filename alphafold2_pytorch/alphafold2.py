@@ -713,7 +713,7 @@ class Alphafold2(nn.Module):
             t_mask_crossed = rearrange(t_mask_crossed, 'b t ... -> (b t) ...')
 
             for _ in range(self.templates_embed_layers):
-                t = self.template_pairwise_embedder(t, mask = t_mask_crossed) + t
+                t = self.template_pairwise_embedder(t, mask = t_mask_crossed)
 
             t = rearrange(t, '(b t) ... -> b t ...', t = num_templates)
             t_mask_crossed = rearrange(t_mask_crossed, '(b t) ... -> b t ...', t = num_templates)
