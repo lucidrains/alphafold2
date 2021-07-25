@@ -102,8 +102,7 @@ def test_extra_msa():
         depth = 2,
         heads = 2,
         dim_head = 32,
-        predict_coords = True,
-        structure_module_dim = 4,
+        predict_coords = True
     )
 
     seq = torch.randint(0, 21, (2, 4))
@@ -163,7 +162,6 @@ def test_coords():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
-        structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
@@ -191,7 +189,6 @@ def test_coords_backbone_with_cbeta():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
-        structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
@@ -219,7 +216,6 @@ def test_coords_all_atoms():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
-        structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
@@ -247,7 +243,6 @@ def test_mds():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
-        structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
@@ -300,7 +295,6 @@ def test_coords_backwards():
         heads = 2,
         dim_head = 32,
         predict_coords = True,
-        structure_module_dim = 1,
         structure_module_depth = 1,
         structure_module_heads = 1,
         structure_module_dim_head = 1,
@@ -346,3 +340,46 @@ def test_confidence():
     )
     
     assert coords.shape[:-1] == confidences.shape[:-1]
+
+def test_recycling():
+    model = Alphafold2(
+        dim = 128,
+        depth = 2,
+        heads = 2,
+        dim_head = 32,
+        predict_coords = True,
+    )
+
+    seq = torch.randint(0, 21, (2, 4))
+    mask = torch.ones_like(seq).bool()
+
+    msa = torch.randint(0, 21, (2, 5, 4))
+    msa_mask = torch.ones_like(msa).bool()
+
+    extra_msa = torch.randint(0, 21, (2, 5, 4))
+    extra_msa_mask = torch.ones_like(extra_msa).bool()
+
+    coords, ret = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        extra_msa = extra_msa,
+        extra_msa_mask = extra_msa_mask,
+        return_aux_logits = True,
+        return_recyclables = True
+    )
+
+    coords, ret = model(
+        seq,
+        msa,
+        mask = mask,
+        msa_mask = msa_mask,
+        extra_msa = extra_msa,
+        extra_msa_mask = extra_msa_mask,
+        recyclables = ret.recyclables,
+        return_aux_logits = True,
+        return_recyclables = True
+    )
+
+    assert True

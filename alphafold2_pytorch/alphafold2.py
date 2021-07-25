@@ -2,7 +2,6 @@ import torch
 from torch import nn, einsum
 from inspect import isfunction
 from functools import partial
-from itertools import islice, cycle
 from collections import namedtuple
 from dataclasses import dataclass
 import torch.nn.functional as F
@@ -17,9 +16,16 @@ from alphafold2_pytorch.mlm import MLM
 
 # structure module
 
-from invariant_point_attention import IPATransformer
+from invariant_point_attention import IPABlock
+from pytorch3d.transforms import quaternion_multiply, quaternion_to_matrix
 
 # constants
+
+@dataclass
+class Recyclables:
+    coords: torch.Tensor
+    single_msa_repr_row: torch.Tensor
+    pairwise_repr: torch.Tensor
 
 @dataclass
 class ReturnValues:
@@ -28,6 +34,7 @@ class ReturnValues:
     phi: torch.Tensor = None
     omega: torch.Tensor = None
     msa_mlm_loss: torch.Tensor = None
+    recyclables: Recyclables = None
 
 # helpers
 
@@ -229,7 +236,6 @@ class AxialAttention(nn.Module):
         # axial attention
 
         out = 0
-        axial_attn_count = 0
 
         if self.col_attn:
             w_x = rearrange(x, 'b h w d -> (b w) h d')
@@ -241,7 +247,6 @@ class AxialAttention(nn.Module):
             w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
 
             out += w_out
-            axial_attn_count += 1
 
         if self.row_attn:
             h_x = rearrange(x, 'b h w d -> (b h) w d')
@@ -253,9 +258,6 @@ class AxialAttention(nn.Module):
             h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
 
             out += h_out
-            axial_attn_count += 1
-
-        out /= axial_attn_count
 
         return out
 
@@ -464,15 +466,12 @@ class Alphafold2(nn.Module):
         extra_msa_evoformer_layers = 4,
         attn_dropout = 0.,
         ff_dropout = 0.,
-        sparse_self_attn = False,
         templates_dim = 32,
         templates_embed_layers = 4,
         templates_angles_feats_dim = 55,
         predict_angles = False,
         symmetrize_omega = False,
         predict_coords = False,                # structure module related keyword arguments below
-        return_aux_logits = False,
-        structure_module_dim = 4,
         structure_module_depth = 4,
         structure_module_heads = 1,
         structure_module_dim_head = 4,
@@ -481,6 +480,7 @@ class Alphafold2(nn.Module):
         mlm_random_replace_token_prob = 0.1,
         mlm_keep_token_same_prob = 0.1,
         mlm_exclude_token_ids = (0,),
+        recycling_distance_buckets = 32
     ):
         super().__init__()
         self.dim = dim
@@ -544,17 +544,9 @@ class Alphafold2(nn.Module):
             self.to_prob_phi   = nn.Linear(dim, constants.PHI_BUCKETS)
             self.to_prob_omega = nn.Linear(dim, constants.OMEGA_BUCKETS)
 
-        # when predicting the coordinates, whether to return the other logits, distogram (and optionally, angles)
-
-        self.return_aux_logits = return_aux_logits
-
         # custom embedding projection
 
         self.embedd_project = nn.Linear(num_embedds, dim)
-
-        # attention types
-
-        layers_sparse_attn = cycle(cast_tuple(sparse_self_attn))
 
         # main trunk modules
 
@@ -590,21 +582,31 @@ class Alphafold2(nn.Module):
         # to coordinate output
 
         self.predict_coords = predict_coords
+        self.structure_module_depth = structure_module_depth
 
-        self.msa_to_single_repr_dim = nn.Linear(dim, structure_module_dim)
-        self.trunk_to_pairwise_repr_dim = nn.Linear(dim, structure_module_dim)
+        self.msa_to_single_repr_dim = nn.Linear(dim, dim)
+        self.trunk_to_pairwise_repr_dim = nn.Linear(dim, dim)
 
         with torch_default_dtype(torch.float32):
-            self.ipa_transformer = IPATransformer(
-                dim = structure_module_dim,
-                depth = structure_module_depth,
+            self.ipa_block = IPABlock(
+                dim = dim,
                 heads = structure_module_heads,
-                predict_points = True
             )
+
+            self.to_quaternion_update = nn.Linear(dim, 6)
+
+        self.to_points = nn.Linear(dim, 3)
 
         # aux confidence measure
 
-        self.lddt_linear = nn.Linear(structure_module_dim, 1)
+        self.lddt_linear = nn.Linear(dim, 1)
+
+        # recycling params
+
+        self.recycling_msa_norm = nn.LayerNorm(dim)
+        self.recycling_pairwise_norm = nn.LayerNorm(dim)
+        self.recycling_distance_embed = nn.Embedding(recycling_distance_buckets, dim)
+        self.recycling_distance_buckets = recycling_distance_buckets
 
     def forward(
         self,
@@ -621,8 +623,11 @@ class Alphafold2(nn.Module):
         templates_mask = None,
         templates_angles = None,
         embedds = None,
+        recyclables = None,
         return_trunk = False,
-        return_confidence = False        
+        return_confidence = False,
+        return_recyclables = False,
+        return_aux_logits = False
     ):
         assert not (self.disable_token_embed and not exists(seq_embed)), 'sequence embedding must be supplied if one has disabled token embedding'
         assert not (self.disable_token_embed and not exists(msa_embed)), 'msa embedding must be supplied if one has disabled token embedding'
@@ -698,6 +703,19 @@ class Alphafold2(nn.Module):
         seq_rel_dist = rearrange(seq_index, 'i -> () i ()') - rearrange(seq_index, 'j -> () () j')
         seq_rel_dist = seq_rel_dist.clamp(-self.max_rel_dist, self.max_rel_dist) + self.max_rel_dist
         rel_pos_emb = self.pos_emb(seq_rel_dist)
+
+        # add recyclables, if present
+
+        if exists(recyclables):
+            m[:, 0] = m[:, 0] + self.recycling_msa_norm(recyclables.single_msa_repr_row)
+            x = x + self.recycling_pairwise_norm(recyclables.pairwise_repr)
+
+            distances = torch.cdist(recyclables.coords, recyclables.coords, p=2)
+            boundaries = torch.linspace(2, 20, steps = self.recycling_distance_buckets, device = device)
+            discretized_distances = torch.bucketize(distances, boundaries[:-1])
+            distance_embed = self.recycling_distance_embed(discretized_distances)
+
+            x = x + distance_embed
 
         # embed templates, if present
 
@@ -801,9 +819,9 @@ class Alphafold2(nn.Module):
 
         # derive single and pairwise embeddings for structural refinement
 
-        m = m.mean(dim = 1)
+        single_msa_repr_row = m[:, 0]
 
-        single_repr = self.msa_to_single_repr_dim(m)
+        single_repr = self.msa_to_single_repr_dim(single_msa_repr_row)
         pairwise_repr = self.trunk_to_pairwise_repr_dim(x)
 
         # prepare float32 precision for equivariance
@@ -814,15 +832,42 @@ class Alphafold2(nn.Module):
         # iterative refinement with equivariant transformer in high precision
 
         with torch_default_dtype(torch.float32):
-            coords = self.ipa_transformer(
-                single_repr,
-                pairwise_repr = pairwise_repr,
-                mask = mask
-            )
+
+            quaternions = torch.tensor([1., 0., 0., 0.], device = device) # initial rotations
+            quaternions = repeat(quaternions, 'd -> b n d', b = b, n = n)
+            translations = torch.zeros((b, n, 3), device = device)
+
+            # go through the layers and apply invariant point attention and feedforward
+
+            for _ in range(self.structure_module_depth):
+                rotations = quaternion_to_matrix(quaternions)
+
+                single_repr = self.ipa_block(
+                    single_repr,
+                    pairwise_repr = pairwise_repr,
+                    rotations = rotations,
+                    translations = translations
+                )
+
+                # update quaternion and translation
+
+                quaternion_update, translation_update = self.to_quaternion_update(single_repr).chunk(2, dim = -1)
+                quaternion_update = F.pad(quaternion_update, (1, 0), value = 1.)
+
+                quaternions = quaternions + quaternion_multiply(quaternions, quaternion_update)
+                translations = translations + einsum('b n c, b n c r -> b n r', translation_update, rotations)
+
+            points_local = self.to_points(single_repr)
+            rotations = quaternion_to_matrix(quaternions)
+            coords = einsum('b n c, b n c d -> b n d', points_local, rotations) + translations
 
         coords.type(original_dtype)
 
-        if self.return_aux_logits:
+        if return_recyclables:
+            coords, single_msa_repr_row, pairwise_repr = map(torch.detach, (coords, single_msa_repr_row, pairwise_repr))
+            ret.recyclables = Recyclables(coords, single_msa_repr_row, pairwise_repr)
+
+        if return_aux_logits:
             return coords, ret
 
         if return_confidence:
