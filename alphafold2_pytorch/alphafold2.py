@@ -704,6 +704,8 @@ class Alphafold2(nn.Module):
         seq_rel_dist = seq_rel_dist.clamp(-self.max_rel_dist, self.max_rel_dist) + self.max_rel_dist
         rel_pos_emb = self.pos_emb(seq_rel_dist)
 
+        x = x + rel_pos_emb
+
         # add recyclables, if present
 
         if exists(recyclables):
