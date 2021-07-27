@@ -219,45 +219,34 @@ class AxialAttention(nn.Module):
 
         x = self.norm(x)
 
-        # axial mask
+        # axial attention
 
-        w_mask = h_mask = None
+        if self.col_attn:
+            axial_dim = w
+            mask_fold_axial_eq = 'b h w -> (b w) h'
+            input_fold_eq = 'b h w d -> (b w) h d'
+            output_fold_eq = '(b w) h d -> b h w d'
+
+        elif self.row_attn:
+            axial_dim = h
+            mask_fold_axial_eq = 'b h w -> (b h) w'
+            input_fold_eq = 'b h w d -> (b h) w d'
+            output_fold_eq = '(b h) w d -> b h w d'
+
+        x = rearrange(x, input_fold_eq)
 
         if exists(mask):
-            w_mask = rearrange(mask, 'b h w -> (b w) h')
-            h_mask = rearrange(mask, 'b h w -> (b h) w')
-
-        # calculate attention bias
+            mask = rearrange(mask, mask_fold_axial_eq)
 
         attn_bias = None
         if exists(self.edges_to_attn_bias) and exists(edges):
             attn_bias = self.edges_to_attn_bias(edges)
+            attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = axial_dim)
 
-        # axial attention
+        tie_dim = axial_dim if self.global_query_attn else None
 
-        out = 0
-
-        if self.col_attn:
-            w_x = rearrange(x, 'b h w d -> (b w) h d')
-            if exists(attn_bias):
-                attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = w)
-
-            tie_dim = w if self.global_query_attn else None
-            w_out = self.attn(w_x, mask = w_mask, attn_bias = attn_bias, tie_dim = tie_dim)
-            w_out = rearrange(w_out, '(b w) h d -> b h w d', h = h, w = w)
-
-            out += w_out
-
-        if self.row_attn:
-            h_x = rearrange(x, 'b h w d -> (b h) w d')
-            if exists(attn_bias):
-                attn_bias = repeat(attn_bias, 'b h i j -> (b x) h i j', x = h)
-
-            tie_dim = h if self.global_query_attn else None
-            h_out = self.attn(h_x, mask = h_mask, attn_bias = attn_bias, tie_dim = tie_dim)
-            h_out = rearrange(h_out, '(b h) w d -> b h w d', h = h, w = w)
-
-            out += h_out
+        out = self.attn(x, mask = mask, attn_bias = attn_bias, tie_dim = tie_dim)
+        out = rearrange(out, output_fold_eq, h = h, w = w)
 
         return out
 
