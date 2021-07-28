@@ -187,7 +187,6 @@ class AxialAttention(nn.Module):
         self,
         dim,
         heads,
-        sparse_attn = False,
         row_attn = True,
         col_attn = True,
         accept_edges = False,
@@ -197,20 +196,18 @@ class AxialAttention(nn.Module):
         super().__init__()
         assert not (not row_attn and not col_attn), 'row or column attention must be turned on'
 
-        attn_class = SparseAttention if sparse_attn else Attention
-
-        self.norm = nn.LayerNorm(dim)
+        self.row_attn = row_attn
+        self.col_attn = col_attn
         self.global_query_attn = global_query_attn
 
-        self.attn = attn_class(dim = dim, heads = heads, **kwargs)
+        self.norm = nn.LayerNorm(dim)
+
+        self.attn = Attention(dim = dim, heads = heads, **kwargs)
 
         self.edges_to_attn_bias = nn.Sequential(
             nn.Linear(dim, heads, bias = False),
             Rearrange('b i j h -> b h i j')
         ) if accept_edges else None
-
-        self.row_attn = row_attn
-        self.col_attn = col_attn
 
     def forward(self, x, edges = None, mask = None):
         assert self.row_attn ^ self.col_attn, 'has to be either row or column attention, but not both'
