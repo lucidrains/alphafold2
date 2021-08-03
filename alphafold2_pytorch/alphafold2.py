@@ -301,7 +301,7 @@ class TriangleMultiplicativeModule(nn.Module):
         out_gate = self.out_gate(x).sigmoid()
 
         left = left * left_gate
-        right = right * left_gate
+        right = right * right_gate
 
         out = einsum(self.mix_einsum_eq, left, right)
 
