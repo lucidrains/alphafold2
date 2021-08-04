@@ -1,8 +1,8 @@
 import torch
 from torch import nn, einsum
+from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 from inspect import isfunction
 from functools import partial
-from collections import namedtuple
 from dataclasses import dataclass
 import torch.nn.functional as F
 
@@ -391,12 +391,11 @@ class MsaAttentionBlock(nn.Module):
 
 # main evoformer class
 
-class Evoformer(nn.Module):
+class EvoformerBlock(nn.Module):
     def __init__(
         self,
         *,
         dim,
-        depth,
         seq_len,
         heads,
         dim_head,
@@ -405,15 +404,38 @@ class Evoformer(nn.Module):
         global_column_attn = False
     ):
         super().__init__()
-        self.layers = nn.ModuleList([])
+        self.layer = nn.ModuleList([
+            PairwiseAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, global_column_attn = global_column_attn),
+            FeedForward(dim = dim, dropout = ff_dropout),
+            MsaAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout),
+            FeedForward(dim = dim, dropout = ff_dropout),
+        ])
 
-        for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                PairwiseAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout, global_column_attn = global_column_attn),
-                FeedForward(dim = dim, dropout = ff_dropout),
-                MsaAttentionBlock(dim = dim, seq_len = seq_len, heads = heads, dim_head = dim_head, dropout = attn_dropout),
-                FeedForward(dim = dim, dropout = ff_dropout),
-            ]))
+    def forward(self, inputs):
+        x, m, mask, msa_mask = inputs
+        attn, ff, msa_attn, msa_ff = self.layer
+
+        # msa attention and transition
+
+        m = msa_attn(m, mask = msa_mask, pairwise_repr = x)
+        m = msa_ff(m) + m
+
+        # pairwise attention and transition
+
+        x = attn(x, mask = mask)
+        x = ff(x) + x
+
+        return x, m, mask, msa_mask
+
+class Evoformer(nn.Module):
+    def __init__(
+        self,
+        *,
+        depth,
+        **kwargs
+    ):
+        super().__init__()
+        self.layers = nn.ModuleList([EvoformerBlock(**kwargs) for _ in range(depth)])
 
     def forward(
         self,
@@ -422,17 +444,8 @@ class Evoformer(nn.Module):
         mask = None,
         msa_mask = None
     ):
-        for attn, ff, msa_attn, msa_ff in self.layers:
-            # msa attention and transition
-
-            m = msa_attn(m, mask = msa_mask, pairwise_repr = x)
-            m = msa_ff(m) + m
-
-            # pairwise attention and transition
-
-            x = attn(x, mask = mask)
-            x = ff(x) + x
-
+        inp = (x, m, mask, msa_mask)
+        x, m, *_ = checkpoint_sequential(self.layers, 1, inp)
         return x, m
 
 class Alphafold2(nn.Module):
