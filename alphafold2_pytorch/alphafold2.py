@@ -859,7 +859,7 @@ class Alphafold2(nn.Module):
                 quaternion_update, translation_update = self.to_quaternion_update(single_repr).chunk(2, dim = -1)
                 quaternion_update = F.pad(quaternion_update, (1, 0), value = 1.)
 
-                quaternions = quaternions + quaternion_multiply(quaternions, quaternion_update)
+                quaternions = quaternion_multiply(quaternions, quaternion_update)
                 translations = translations + einsum('b n c, b n c r -> b n r', translation_update, rotations)
 
             points_local = self.to_points(single_repr)
