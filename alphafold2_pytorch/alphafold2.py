@@ -161,6 +161,7 @@ class Attention(nn.Module):
 
         # attention
 
+        dots = dots - dots.max(dim = -1, keepdims = True).values
         attn = dots.softmax(dim = -1)
         attn = self.dropout(attn)
 
