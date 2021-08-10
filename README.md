@@ -8,6 +8,8 @@ Once this is replicated, I intend to fold all available amino acid sequences out
 
 Update: Deepmind has open sourced the official <a href="https://github.com/deepmind/alphafold">code</a> in Jax, along with the weights 🙏! This repository will now be geared towards a straight pytorch translation with some improvements on positional encoding
 
+<a href="https://www.youtube.com/watch?v=nGVFbPKrRWQ">ArxivInsights video</a>
+
 ## Install
 
 ```bash
