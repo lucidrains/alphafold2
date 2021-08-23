@@ -852,11 +852,15 @@ class Alphafold2(nn.Module):
 
             # go through the layers and apply invariant point attention and feedforward
 
-            for _ in range(self.structure_module_depth):
+            for i in range(self.structure_module_depth):
+                is_last = i == (self.structure_module_depth - 1)
 
                 # the detach comes from
                 # https://github.com/deepmind/alphafold/blob/0bab1bf84d9d887aba5cfb6d09af1e8c3ecbc408/alphafold/model/folding.py#L383
-                rotations = quaternion_to_matrix(quaternions).detach()
+                rotations = quaternion_to_matrix(quaternions)
+
+                if not is_last:
+                    rotations = rotations.detach()
 
                 single_repr = self.ipa_block(
                     single_repr,
