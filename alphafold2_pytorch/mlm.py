@@ -70,7 +70,7 @@ class MLM(nn.Module):
 
         random_replace_token_prob_mask = get_mask_subset_with_prob(mlm_mask, (1 - self.keep_token_same_prob) * self.random_replace_token_prob)
 
-        random_tokens = torch.randint(1, constants.NUM_AMINO_ACIDS, seq.shape)
+        random_tokens = torch.randint(1, constants.NUM_AMINO_ACIDS, seq.shape).to(seq.device)
 
         for token_id in self.exclude_token_ids:
             random_replace_token_prob_mask = random_replace_token_prob_mask & (random_tokens != token_id)  # make sure you never substitute a token with an excluded token type (pad, start, end)
