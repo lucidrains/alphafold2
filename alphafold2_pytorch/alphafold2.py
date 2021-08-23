@@ -337,7 +337,7 @@ class OuterMean(nn.Module):
         if exists(mask):
             # masked mean, if there are padding in the rows of the MSA
             mask = rearrange(mask, 'b m i -> b m i () ()') * rearrange(mask, 'b m j -> b m () j ()')
-            outer = outer.masked_fill(mask, 0.)
+            outer = outer.masked_fill(~mask, 0.)
             outer = outer.mean(dim = 1) / (mask.sum(dim = 1) + self.eps)
         else:
             outer = outer.mean(dim = 1)
@@ -860,6 +860,7 @@ class Alphafold2(nn.Module):
 
                 single_repr = self.ipa_block(
                     single_repr,
+                    mask = mask,
                     pairwise_repr = pairwise_repr,
                     rotations = rotations,
                     translations = translations
