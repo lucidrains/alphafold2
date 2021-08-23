@@ -860,6 +860,7 @@ class Alphafold2(nn.Module):
 
                 single_repr = self.ipa_block(
                     single_repr,
+                    mask = mask,
                     pairwise_repr = pairwise_repr,
                     rotations = rotations,
                     translations = translations
