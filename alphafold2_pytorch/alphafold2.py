@@ -49,6 +49,11 @@ def default(val, d):
 def cast_tuple(val, depth = 1):
     return val if isinstance(val, tuple) else (val,) * depth
 
+def init_zero_(layer):
+    nn.init.constant_(layer.weight, 0.)
+    if exists(layer.bias):
+        nn.init.constant_(layer.bias, 0.)
+
 # helper classes
 
 class Always(nn.Module):
@@ -82,6 +87,7 @@ class FeedForward(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(dim * mult, dim)
         )
+        init_zero_(self.net[-1])
 
     def forward(self, x, **kwargs):
         x = self.norm(x)
@@ -114,6 +120,7 @@ class Attention(nn.Module):
         nn.init.constant_(self.gating.bias, 1.)
 
         self.dropout = nn.Dropout(dropout)
+        init_zero_(self.to_out)
 
     def forward(self, x, mask = None, attn_bias = None, context = None, context_mask = None, tie_dim = None):
         device, orig_shape, h, has_context = x.device, x.shape, self.heads, exists(context)
@@ -605,6 +612,8 @@ class Alphafold2(nn.Module):
             )
 
             self.to_quaternion_update = nn.Linear(dim, 6)
+
+        init_zero_(self.ipa_block.attn.to_out)
 
         self.to_points = nn.Linear(dim, 3)
 
