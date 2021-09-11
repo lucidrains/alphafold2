@@ -639,7 +639,7 @@ https://pubmed.ncbi.nlm.nih.gov/33637700/
 
 * **Final step** - <a href="https://graylab.jhu.edu/PyRosetta.documentation/pyrosetta.rosetta.protocols.relax.html#pyrosetta.rosetta.protocols.relax.FastRelax">Fast Relax</a> - **Installation Instructions**:
     * Download the pyrosetta wheel from: http://www.pyrosetta.org/dow (select appropiate version) - beware the file is heavy (approx 1.2 Gb)
-        * Ask for username and password to `@hypnopump` in the Discord
+        * The download should be free for anyone with an academic email
     * Bash > `cd downloads_folder` > `pip install pyrosetta_wheel_filename.whl`
 
 <a href="https://parmed.github.io/ParmEd/html/omm_amber.html">OpenMM Amber</a>
