@@ -3,9 +3,10 @@ from setuptools import setup, find_packages
 setup(
   name = 'alphafold2-pytorch',
   packages = find_packages(),
-  version = '0.4.31',
+  version = '0.4.32',
   license='MIT',
   description = 'AlphaFold2 - Pytorch',
+  long_description_content_type = 'text/markdown',
   author = 'Phil Wang, Eric Alcaide',
   author_email = 'lucidrains@gmail.com, ericalcaide1@gmail.com',
   url = 'https://github.com/lucidrains/alphafold2',
